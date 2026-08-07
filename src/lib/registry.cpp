@@ -86,7 +86,11 @@ DllDirCookie addDllSearchDirectory(const std::wstring& dir)
     auto fn = (pfnAddDllDirectory)(void*)GetProcAddress(
         GetModuleHandleW(L"kernel32.dll"), "AddDllDirectory");
     if (!fn) return nullptr;
-    return fn(dir.c_str()); // LOAD_LIBRARY_SEARCH_USER_DIRS で参照される
+    // AddDllDirectory は相対パスでは動作が未定義のため絶対化する
+    wchar_t full[MAX_PATH * 4];
+    DWORD n = GetFullPathNameW(dir.c_str(), (DWORD)(sizeof(full) / sizeof(full[0])), full, nullptr);
+    if (n == 0 || n >= sizeof(full) / sizeof(full[0])) return nullptr;
+    return fn(full); // LOAD_LIBRARY_SEARCH_USER_DIRS で参照される
 }
 
 bool removeDllSearchDirectory(DllDirCookie cookie)
@@ -99,12 +103,26 @@ bool removeDllSearchDirectory(DllDirCookie cookie)
     return fn(cookie) != FALSE;
 }
 
+// byPath のキー。同じ DLL がパス表記の揺れ(大文字小文字、セパレータ、. や ..)で
+// 重複登録されないよう正規化する。表示用のパスは PluginInfo::path に別途保持する。
+static std::wstring normalizeKey(const std::wstring& path)
+{
+    fs::path p(path);
+    return toLower(p.make_preferred().lexically_normal().wstring());
+}
+
+static bool isAbsolutePath(const std::wstring& p)
+{
+    return (p.size() >= 2 && p[1] == L':') ||
+           (p.size() >= 2 && (p[0] == L'\\' || p[0] == L'/') && (p[1] == L'\\' || p[1] == L'/'));
+}
+
 struct PluginRegistry::Impl {
     HostOptions opt;
     HostContext ctx;
     ModuleManager modules;
     mutable std::mutex m;
-    std::map<std::wstring, PluginInfo> byPath;
+    std::map<std::wstring, PluginInfo> byPath; // キーは normalizeKey(パス)
     std::vector<DllDirCookie> dllDirCookies; // Registry 自身が登録した分(解除はアプリの責任)
 
     explicit Impl(HostOptions o)
@@ -178,9 +196,10 @@ void PluginRegistry::scanDirectory(const std::wstring& dir, int maxDepth)
         int64_t mtime = (int64_t)e.last_write_time(ec2).time_since_epoch().count();
         if (ec2) continue;
 
+        std::wstring key = normalizeKey(path);
         {
             std::lock_guard<std::mutex> lock(impl_->m);
-            auto found = impl_->byPath.find(path);
+            auto found = impl_->byPath.find(key);
             if (found != impl_->byPath.end() &&
                 found->second.fileSize == size && found->second.mtime == mtime) {
                 continue; // キャッシュ有効: DLL をロードしない
@@ -192,7 +211,7 @@ void PluginRegistry::scanDirectory(const std::wstring& dir, int maxDepth)
         info.mtime = mtime;
         {
             std::lock_guard<std::mutex> lock(impl_->m);
-            impl_->byPath[path] = std::move(info);
+            impl_->byPath[key] = std::move(info);
         }
     }
 }
@@ -322,6 +341,9 @@ bool PluginRegistry::saveCache() const
         std::lock_guard<std::mutex> lock(impl_->m);
         for (const auto& kv : impl_->byPath) {
             const PluginInfo& p = kv.second;
+            // 存在しなくなった DLL のエントリは持ち越さない(古いパス表記の残骸も
+            // ここで自然に消える。次回そのパスが復活したら再 probe されるだけ)
+            if (GetFileAttributesW(p.path.c_str()) == INVALID_FILE_ATTRIBUTES) continue;
             out += "[plugin]\n";
             out += "path=" + escapeText(p.path) + "\n";
             out += "size=" + std::to_string(p.fileSize) + "\n";
@@ -362,7 +384,15 @@ bool PluginRegistry::loadCache()
     bool inPlugin = false;
     bool headerOk = false;
     auto commit = [&] {
-        if (inPlugin && !cur.path.empty()) impl_->byPath[cur.path] = cur;
+        // 相対パスのエントリ(旧バージョンの残骸)は捨てる。キーは正規化し、
+        // 同一 DLL の表記違いが混在していた場合は更新日時が新しい方を残す。
+        if (inPlugin && !cur.path.empty() && isAbsolutePath(cur.path)) {
+            std::wstring key = normalizeKey(cur.path);
+            auto found = impl_->byPath.find(key);
+            if (found == impl_->byPath.end() || found->second.mtime <= cur.mtime) {
+                impl_->byPath[key] = cur;
+            }
+        }
         cur = PluginInfo{};
     };
     size_t pos = 0;

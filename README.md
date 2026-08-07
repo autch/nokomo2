@@ -193,7 +193,6 @@ libogg も同様の BSD 系。したがって nokomo2 への FLAC 出力組み�
 - `kpi_CreateDecoder`(プラグインからプラグインを使う)は未提供
   (本体も kbrunkpi 経由では未実装)
 - シーク API(`DecodeSession::seek`)は未実装
-- キャッシュに存在しなくなった DLL のエントリが残る(実害なし)
 
 ## SDK について
 

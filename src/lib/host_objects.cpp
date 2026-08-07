@@ -620,7 +620,10 @@ IKpiConfig* HostContext::getConfig(const GUID* guid)
     if (it == configs.end()) {
         std::wstring iniPath;
         if (!options.configDir.empty()) {
-            CreateDirectoryW(options.configDir.c_str(), nullptr);
+            // 中間ディレクトリ(%APPDATA%\nokomo2 等)ごと作成する
+            // (CreateDirectoryW は親が存在しないと失敗し、設定が保存されなくなる)
+            std::error_code ec;
+            fs::create_directories(fs::path(options.configDir), ec);
             iniPath = options.configDir + L"\\" + key + L".ini";
         }
         ComPtr<MemoryConfig> cfg;
