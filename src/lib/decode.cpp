@@ -244,7 +244,17 @@ std::unique_ptr<DecodeSession> createDecodeSession(std::shared_ptr<LoadedModule>
                                        impl->decoder.put());
     }
     if (count == 0 || !impl->decoder) {
-        if (errOut) *errOut = L"プラグインがファイルを開けない";
+        if (errOut) {
+            *errOut = L"プラグインがファイルを開けない";
+            if (info.isLegacy) {
+                const char* ansi = nullptr;
+                if (!impl->file->GetRealFileA(&ansi) || !ansi) {
+                    *errOut = L"旧仕様プラグインに渡す ANSI ファイル名を用意出来ない"
+                              L"(パスに ANSI 変換不能な文字があり、8.3 短縮名も"
+                              L"テンポラリコピーも失敗)";
+                }
+            }
+        }
         return nullptr;
     }
     impl->trackCount = count;

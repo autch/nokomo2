@@ -43,10 +43,18 @@ public:
     BOOL   WINAPI Abort(void) override;
 
 private:
-    LocalKpiFile(HANDLE h, std::wstring fullPath);
+    explicit LocalKpiFile(std::wstring fullPath);
     ~LocalKpiFile() override;
 
-    HANDLE h_;
+    // OS ハンドルは最初の Read/Seek/GetBuffer まで開かない(遅延オープン)。
+    // 旧仕様プラグイン等は GetRealFileA/W で得た実ファイル名を共有モード 0(排他)
+    // で開くことがあり、ホストがハンドルを保持しているとその時点で共有違反になる。
+    // KbMedia Player の旧仕様経路はファイル名を渡すだけでハンドルを持たないため、
+    // それと同じ条件にする。
+    HANDLE ensureHandle();
+
+    HANDLE h_ = INVALID_HANDLE_VALUE;
+    bool openTried_ = false;
     std::wstring fullPath_;
     std::wstring fileName_;
     std::atomic<bool> aborted_{false};

@@ -225,9 +225,16 @@ private:
 
     static DWORD multiInstanceFrom(DWORD dwReentrant)
     {
+        // dwReentrant の解釈は現行 SDK 同梱の kmp_pi.h(2016/10/03版)を正とする。
+        // (旧仕様の再入要件は時期により変遷しており、過去のホスト実装の挙動は
+        // 典拠にしない)
+        //   1          = 複数同時再生可能
+        //   0          = HKMP を 2 つ以上同時に持てない(本体は 2 つ目以降を別 EXE 経由)
+        //   0xFFFFFFFF = 常に別 EXE 経由
+        // このホストは別プロセス化を行わないため、後二者は同時 1 個に直列化する。
         if (dwReentrant == 1) return KPI_MULTINST_INFINITE;
-        if (dwReentrant == 0xFFFFFFFF) return KPI_MULTINST_ZERO; // ホストでは同時1個扱い
-        return KPI_MULTINST_ONE; // dwReentrant == 0
+        if (dwReentrant == 0xFFFFFFFF) return KPI_MULTINST_ZERO;
+        return KPI_MULTINST_ONE; // dwReentrant == 0(未定義値も安全側でこちら)
     }
 
     KMPMODULE* mod_;

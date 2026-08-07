@@ -295,7 +295,14 @@ std::optional<FileTags> PluginRegistry::scanTags(const std::wstring& file, uint3
             count = mod->module()->Open(nullptr, f.get(), folder.get(), dec.put());
         }
         if (count == 0 || !dec) {
-            record(cand, false, L"プラグインがファイルを開けない");
+            std::wstring reason = L"プラグインがファイルを開けない";
+            if (cand.isLegacy) {
+                const char* ansi = nullptr;
+                if (!f->GetRealFileA(&ansi) || !ansi) {
+                    reason = L"旧仕様プラグインに渡す ANSI ファイル名を用意出来ない";
+                }
+            }
+            record(cand, false, std::move(reason));
             continue; // 次の候補プラグインへフォールバック
         }
         record(cand, true, L"");

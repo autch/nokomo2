@@ -17,16 +17,28 @@ LocalKpiFile* LocalKpiFile::open(const std::wstring& path)
     wchar_t full[MAX_PATH * 4];
     DWORD n = GetFullPathNameW(path.c_str(), (DWORD)(sizeof(full) / sizeof(full[0])), full, nullptr);
     if (n == 0 || n >= sizeof(full) / sizeof(full[0])) return nullptr;
-    HANDLE h = CreateFileW(full, GENERIC_READ, FILE_SHARE_READ, nullptr,
-                           OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (h == INVALID_HANDLE_VALUE) return nullptr;
-    return new LocalKpiFile(h, full);
+    // 存在チェックのみ行い、ハンドルはまだ開かない(遅延オープン。理由はヘッダ参照)
+    DWORD attr = GetFileAttributesW(full);
+    if (attr == INVALID_FILE_ATTRIBUTES || (attr & FILE_ATTRIBUTE_DIRECTORY)) return nullptr;
+    return new LocalKpiFile(full);
 }
 
-LocalKpiFile::LocalKpiFile(HANDLE h, std::wstring fullPath)
-    : h_(h), fullPath_(std::move(fullPath))
+LocalKpiFile::LocalKpiFile(std::wstring fullPath)
+    : fullPath_(std::move(fullPath))
 {
     fileName_ = fileNameOf(fullPath_);
+}
+
+HANDLE LocalKpiFile::ensureHandle()
+{
+    std::lock_guard<std::mutex> lock(m_);
+    if (!openTried_) {
+        openTried_ = true;
+        h_ = CreateFileW(fullPath_.c_str(), GENERIC_READ,
+                         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                         OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    }
+    return h_;
 }
 
 LocalKpiFile::~LocalKpiFile()
@@ -38,41 +50,64 @@ LocalKpiFile::~LocalKpiFile()
     if (!tempCopyDir_.empty()) RemoveDirectoryW(tempCopyDir_.c_str());
 }
 
-// 損失なく ANSI へ変換出来る場合のみ true
+// 損失なく ANSI へ変換出来る場合のみ true。
+// WC_NO_BEST_FIT_CHARS は ACP=UTF-8(Win10 のベータ設定や一部の Wine)で
+// ERROR_INVALID_FLAGS になり全パスが変換不能扱いになるため使わず、
+// 「変換して逆変換した結果が一致するか」で無損失を判定する
+// (CreateFileA が同じファイルを開けることの判定として十分)。
 static bool toAnsiStrict(const std::wstring& s, std::string* out)
 {
-    BOOL usedDefault = FALSE;
-    int need = WideCharToMultiByte(CP_ACP, WC_NO_BEST_FIT_CHARS, s.c_str(), -1,
-                                   nullptr, 0, nullptr, &usedDefault);
-    if (need <= 0 || usedDefault) return false;
+    int need = WideCharToMultiByte(CP_ACP, 0, s.c_str(), -1, nullptr, 0, nullptr, nullptr);
+    if (need <= 0) return false;
     out->resize((size_t)need);
-    WideCharToMultiByte(CP_ACP, WC_NO_BEST_FIT_CHARS, s.c_str(), -1,
-                        out->data(), need, nullptr, nullptr);
+    WideCharToMultiByte(CP_ACP, 0, s.c_str(), -1, out->data(), need, nullptr, nullptr);
     out->resize(strlen(out->c_str()));
-    return true;
+    int wn = MultiByteToWideChar(CP_ACP, 0, out->c_str(), -1, nullptr, 0);
+    if (wn <= 0) return false;
+    std::wstring back((size_t)wn, L'\0');
+    MultiByteToWideChar(CP_ACP, 0, out->c_str(), -1, back.data(), wn);
+    back.resize(wcslen(back.c_str()));
+    return back == s;
 }
 
 DWORD WINAPI LocalKpiFile::Read(void* pBuffer, DWORD dwSize)
 {
     if (aborted_.load(std::memory_order_relaxed)) return 0;
+    HANDLE h = ensureHandle();
+    if (h == INVALID_HANDLE_VALUE) return 0;
     DWORD read = 0;
-    if (!ReadFile(h_, pBuffer, dwSize, &read, nullptr)) return 0;
+    if (!ReadFile(h, pBuffer, dwSize, &read, nullptr)) return 0;
     return read;
 }
 
 UINT64 WINAPI LocalKpiFile::Seek(INT64 i64Pos, DWORD dwOrigin)
 {
     if (aborted_.load(std::memory_order_relaxed)) return KPI_FILE_EOF;
+    HANDLE h = ensureHandle();
+    if (h == INVALID_HANDLE_VALUE) return KPI_FILE_EOF;
     LARGE_INTEGER pos, out;
     pos.QuadPart = i64Pos;
     // FILE_BEGIN/CURRENT/END は KPI 側と同じ値
-    if (!SetFilePointerEx(h_, pos, &out, dwOrigin)) return KPI_FILE_EOF;
+    if (!SetFilePointerEx(h, pos, &out, dwOrigin)) return KPI_FILE_EOF;
     return (UINT64)out.QuadPart;
 }
 
 UINT64 WINAPI LocalKpiFile::GetSize(void)
 {
     if (aborted_.load(std::memory_order_relaxed)) return KPI_FILE_EOF;
+    {
+        // ハンドルを開かずに取得出来るならそうする(排他オープン中のプラグインと
+        // 競合しないため)
+        std::lock_guard<std::mutex> lock(m_);
+        if (!openTried_) {
+            WIN32_FILE_ATTRIBUTE_DATA fad;
+            if (GetFileAttributesExW(fullPath_.c_str(), GetFileExInfoStandard, &fad)) {
+                return ((UINT64)fad.nFileSizeHigh << 32) | fad.nFileSizeLow;
+            }
+            return KPI_FILE_EOF;
+        }
+    }
+    if (h_ == INVALID_HANDLE_VALUE) return KPI_FILE_EOF;
     LARGE_INTEGER sz;
     if (!GetFileSizeEx(h_, &sz)) return KPI_FILE_EOF;
     return (UINT64)sz.QuadPart;
@@ -107,7 +142,15 @@ BOOL WINAPI LocalKpiFile::GetRealFileA(const char** ppszFileNameA)
     std::lock_guard<std::mutex> lock(m_);
     if (ansiState_ == 0) {
         ansiState_ = 2;
+        wchar_t shortBuf[MAX_PATH * 4];
         if (toAnsiStrict(fullPath_, &ansiPath_)) {
+            ansiState_ = 1;
+        } else if (DWORD sn = GetShortPathNameW(fullPath_.c_str(), shortBuf,
+                                                (DWORD)(sizeof(shortBuf) / sizeof(shortBuf[0])));
+                   sn > 0 && sn < sizeof(shortBuf) / sizeof(shortBuf[0]) &&
+                   toAnsiStrict(shortBuf, &ansiPath_)) {
+            // 8.3 短縮名なら ANSI で表現出来ることが多い(KbMP と同様の手法)。
+            // コピーが不要で、同一フォルダの参照ファイルもそのまま解決出来る。
             ansiState_ = 1;
         } else {
             // 仕様: ANSI で表現出来ない場合はテンポラリにコピーを作成して
@@ -156,6 +199,14 @@ BOOL WINAPI LocalKpiFile::GetBuffer(const BYTE** ppBuffer, size_t* pstSize)
     std::lock_guard<std::mutex> lock(m_);
     if (!mapTried_) {
         mapTried_ = true;
+        // GetBuffer は実ハンドルが必要(ここで初めて開くことがある)
+        if (!openTried_) {
+            openTried_ = true;
+            h_ = CreateFileW(fullPath_.c_str(), GENERIC_READ,
+                             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                             OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        }
+        if (h_ == INVALID_HANDLE_VALUE) return FALSE;
         UINT64 size = 0;
         LARGE_INTEGER sz;
         if (GetFileSizeEx(h_, &sz)) size = (UINT64)sz.QuadPart;
