@@ -61,6 +61,11 @@ bool PluginInfo::canTagOnlyOpen() const
     return (supportTagInfo & KPI_DECODER_MODULEINFO::TAG_TITLE) != 0;
 }
 
+std::wstring PluginInfo::displayName() const
+{
+    return fileNameOf(path) + L" v" + std::to_wstring(pluginVersion);
+}
+
 const std::wstring* TrackTags::find(const std::wstring& name) const
 {
     std::wstring key = toLower(name);
@@ -246,21 +251,37 @@ std::vector<const PluginInfo*> PluginRegistry::findByExtension(const std::wstrin
 // タグ列挙(タグ専用オープン)
 ///////////////////////////////////////////////////////////////////////////////
 
-std::optional<FileTags> PluginRegistry::scanTags(const std::wstring& file, uint32_t tagFields)
+std::optional<FileTags> PluginRegistry::scanTags(const std::wstring& file, uint32_t tagFields,
+                                                 std::vector<OpenAttempt>* attemptsOut)
 {
+    if (attemptsOut) attemptsOut->clear();
+    auto record = [&](const PluginInfo& cand, bool used, std::wstring reason) {
+        if (attemptsOut) {
+            attemptsOut->push_back({cand.path, cand.displayName(), used, std::move(reason)});
+        }
+    };
     std::wstring ext = extensionOf(file);
     for (const PluginInfo& cand : impl_->candidatesFor(ext)) {
         // タグ専用オープン(Open(cpRequest=NULL))は TAG_TITLE 対応プラグインにのみ許される
-        if (!cand.canTagOnlyOpen()) continue;
+        if (!cand.canTagOnlyOpen()) {
+            record(cand, false, L"タグ取得非対応(タグ専用オープン不可)");
+            continue;
+        }
 
         std::wstring err;
         auto mod = impl_->modules.acquire(cand, impl_->ctx, &err);
-        if (!mod) continue;
+        if (!mod) {
+            record(cand, false, L"ロード失敗: " + err);
+            continue;
+        }
         LoadedModule::SlotGuard slot(mod);
 
         ComPtr<IKpiFile> f;
         f.attach(LocalKpiFile::open(file));
-        if (!f) return std::nullopt;
+        if (!f) {
+            record(cand, false, L"ファイルを開けない");
+            return std::nullopt;
+        }
         IKpiFolder* rawFolder = DirectoryFolder::open(parentDirOf(file));
         if (!rawFolder) rawFolder = new KbKpiNullFolder;
         ComPtr<IKpiFolder> folder;
@@ -273,10 +294,15 @@ std::optional<FileTags> PluginRegistry::scanTags(const std::wstring& file, uint3
             // cpRequest=NULL: タグ取得専用オープン(プラグインは処理を最小限に抑える)
             count = mod->module()->Open(nullptr, f.get(), folder.get(), dec.put());
         }
-        if (count == 0 || !dec) continue; // 次の候補プラグインへ
+        if (count == 0 || !dec) {
+            record(cand, false, L"プラグインがファイルを開けない");
+            continue; // 次の候補プラグインへフォールバック
+        }
+        record(cand, true, L"");
 
         FileTags out;
         out.pluginPath = cand.path;
+        out.pluginDisplay = cand.displayName();
         out.trackCount = count;
 
         if (count > 1) {
@@ -307,19 +333,31 @@ std::optional<FileTags> PluginRegistry::scanTags(const std::wstring& file, uint3
 
 std::unique_ptr<DecodeSession> PluginRegistry::openDecode(const std::wstring& file,
                                                           const DecodeRequest& req,
-                                                          std::wstring* errOut)
+                                                          std::wstring* errOut,
+                                                          std::vector<OpenAttempt>* attemptsOut)
 {
+    if (attemptsOut) attemptsOut->clear();
+    auto record = [&](const PluginInfo& cand, bool used, std::wstring reason) {
+        if (attemptsOut) {
+            attemptsOut->push_back({cand.path, cand.displayName(), used, std::move(reason)});
+        }
+    };
     std::wstring ext = extensionOf(file);
     std::wstring lastErr = L"対応するプラグインがない: " + ext;
     for (const PluginInfo& cand : impl_->candidatesFor(ext)) {
         std::wstring err;
         auto mod = impl_->modules.acquire(cand, impl_->ctx, &err);
         if (!mod) {
+            record(cand, false, L"ロード失敗: " + err);
             lastErr = cand.path + L": " + err;
             continue;
         }
         auto session = createDecodeSession(std::move(mod), cand, file, req, impl_->opt, &err);
-        if (session) return session;
+        if (session) {
+            record(cand, true, L"");
+            return session;
+        }
+        record(cand, false, err);
         lastErr = err;
     }
     if (errOut) *errOut = lastErr;

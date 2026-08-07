@@ -62,6 +62,16 @@ void printTags(const wchar_t* indent, const TrackTags& tags)
     }
 }
 
+// フォールバックの可視化: 採用されなかった候補プラグインの試行結果を表示
+void printAttempts(FILE* to, const std::vector<OpenAttempt>& attempts)
+{
+    for (const auto& a : attempts) {
+        if (!a.used) {
+            fwprintf(to, L"  候補 %ls → %ls\n", a.pluginDisplay.c_str(), a.reason.c_str());
+        }
+    }
+}
+
 std::wstring formatTime(uint64_t frames, uint32_t rate)
 {
     if (frames == kUnknown64 || rate == 0) return L"??:??";
@@ -89,12 +99,15 @@ struct Options {
 bool convertOne(PluginRegistry& reg, const Options& opt, const std::wstring& input)
 {
     std::wstring err;
-    auto session = reg.openDecode(input, opt.req, &err);
+    std::vector<OpenAttempt> attempts;
+    auto session = reg.openDecode(input, opt.req, &err, &attempts);
     if (!session) {
         fwprintf(stderr, L"エラー: %ls: %ls\n", input.c_str(), err.c_str());
+        printAttempts(stderr, attempts);
         return false;
     }
-    fwprintf(stdout, L"%ls (%ls)\n", input.c_str(), session->plugin().description.c_str());
+    fwprintf(stdout, L"%ls (%ls)\n", input.c_str(), session->plugin().displayName().c_str());
+    printAttempts(stdout, attempts);
 
     const uint32_t count = session->trackCount();
     uint32_t first = opt.track ? opt.track : 1;
@@ -272,14 +285,18 @@ int wmain(int argc, wchar_t** argv)
     if (opt.listOnly) {
         for (const PluginInfo* p : reg.plugins()) {
             if (p->valid) {
-                fwprintf(stdout, L"%ls\n  %ls%ls\n  対応拡張子: %ls%ls%ls\n",
-                         p->path.c_str(), p->description.c_str(),
+                fwprintf(stdout, L"%ls%ls\n  %ls\n  %ls\n  対応拡張子: %ls%ls%ls\n",
+                         p->displayName().c_str(),
                          p->isLegacy ? L" [旧仕様]" : L"",
+                         p->path.c_str(),
+                         p->description.c_str(),
                          p->supportExts.c_str(),
                          p->multiSongExts.empty() ? L"" : L" (複数曲: ",
                          p->multiSongExts.empty() ? L"" : (p->multiSongExts + L")").c_str());
             } else {
-                fwprintf(stdout, L"%ls\n  無効: %ls\n", p->path.c_str(), p->invalidReason.c_str());
+                fwprintf(stdout, L"%ls\n  %ls\n  無効: %ls\n",
+                         nd::fileNameOf(p->path).c_str(), p->path.c_str(),
+                         p->invalidReason.c_str());
             }
         }
         return 0;
@@ -293,13 +310,17 @@ int wmain(int argc, wchar_t** argv)
     int failures = 0;
     for (const auto& file : opt.files) {
         if (opt.tagsOnly) {
-            auto tags = reg.scanTags(file, TagFieldAll);
+            std::vector<OpenAttempt> attempts;
+            auto tags = reg.scanTags(file, TagFieldAll, &attempts);
             if (!tags) {
                 fwprintf(stderr, L"エラー: %ls: タグ取得不可\n", file.c_str());
+                printAttempts(stderr, attempts);
                 ++failures;
                 continue;
             }
-            fwprintf(stdout, L"%ls (%u 曲)\n", file.c_str(), tags->trackCount);
+            fwprintf(stdout, L"%ls (%u 曲, %ls)\n", file.c_str(), tags->trackCount,
+                     tags->pluginDisplay.c_str());
+            printAttempts(stdout, attempts);
             if (!tags->album.values.empty()) {
                 fwprintf(stdout, L"  [全体]\n");
                 printTags(L"    ", tags->album);

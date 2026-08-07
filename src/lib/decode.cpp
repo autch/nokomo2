@@ -244,7 +244,7 @@ std::unique_ptr<DecodeSession> createDecodeSession(std::shared_ptr<LoadedModule>
                                        impl->decoder.put());
     }
     if (count == 0 || !impl->decoder) {
-        if (errOut) *errOut = L"プラグインがファイルを開けない: " + info.description;
+        if (errOut) *errOut = L"プラグインがファイルを開けない";
         return nullptr;
     }
     impl->trackCount = count;

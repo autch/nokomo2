@@ -65,6 +65,9 @@ struct PluginInfo {
     std::vector<std::wstring> extensionList() const;
     bool supportsExtension(const std::wstring& extLower) const;
     bool isMultiSongExtension(const std::wstring& extLower) const;
+    // 表示用の短い識別名: "kbflac.kpi v30" 形式(ファイル名 + dwPluginVersion)。
+    // cszDescription は自由文で長いため、使用プラグインの提示にはこちらを推奨。
+    std::wstring displayName() const;
     // タグ専用オープン(Open(cpRequest=NULL))を呼んで良いか
     // (KPI_DECODER_MODULEINFO::TAG_TITLE が立っている場合のみ許される)
     bool canTagOnlyOpen() const;
@@ -123,10 +126,21 @@ struct TrackTags {
 };
 
 struct FileTags {
-    std::wstring pluginPath;          // 使用したプラグイン
+    std::wstring pluginPath;          // 使用したプラグイン(フルパス)
+    std::wstring pluginDisplay;       // 表示用(PluginInfo::displayName())
     uint32_t trackCount = 0;
     TrackTags album;                  // 複数曲ファイルの全体情報(Select(0)相当)
     std::vector<TrackTags> tracks;    // tracks[0] = 曲番号 1
+};
+
+// openDecode / scanTags の候補プラグイン試行記録。
+// 同一拡張子に複数のプラグインが対応する場合、優先度順(バージョン降順→更新日時
+// 降順)に試行し、失敗したら次の候補にフォールバックする。その過程の可視化用。
+struct OpenAttempt {
+    std::wstring pluginPath;
+    std::wstring pluginDisplay;   // PluginInfo::displayName()
+    bool used = false;            // このプラグインが採用された
+    std::wstring reason;          // 不採用・失敗の理由(採用時は空)
 };
 
 struct DecodeRequest {
@@ -209,8 +223,10 @@ public:
 
     // タグ列挙。タグ専用オープンを使い、対応プラグインだけをロードする。
     // tagFields には必要なフィールドだけを渡すと高速(既定: タイトル+アーティスト)。
+    // attemptsOut に候補プラグインの試行過程(スキップ・失敗・採用)を返せる。
     std::optional<FileTags> scanTags(const std::wstring& file,
-                                     uint32_t tagFields = TagFieldTitle | TagFieldArtist);
+                                     uint32_t tagFields = TagFieldTitle | TagFieldArtist,
+                                     std::vector<OpenAttempt>* attemptsOut = nullptr);
 
     // HostOptions::dllSearchDirs のうち、この PluginRegistry が構築時に
     // AddDllDirectory した項目の Cookie(並びは dllSearchDirs と対応)。
@@ -219,9 +235,11 @@ public:
     const std::vector<DllDirCookie>& dllDirCookies() const;
 
     // デコード用オープン。失敗時は nullptr(errOut に理由)。
+    // attemptsOut に候補プラグインの試行過程(失敗・フォールバック・採用)を返せる。
     std::unique_ptr<DecodeSession> openDecode(const std::wstring& file,
                                               const DecodeRequest& req = {},
-                                              std::wstring* errOut = nullptr);
+                                              std::wstring* errOut = nullptr,
+                                              std::vector<OpenAttempt>* attemptsOut = nullptr);
 
     const HostOptions& options() const;
 
