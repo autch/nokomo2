@@ -71,7 +71,7 @@ public:
                 *ppMediaInfo = &mi_;
             }
         }
-        return dwNumber == 0 ? count_ : dwNumber;
+        return dwNumber; // dwNumber=0(全体情報)では 0 を返す(新仕様の約束事)
     }
 
     DWORD WINAPI Render(BYTE* pBuffer, DWORD dwSizeSample) override

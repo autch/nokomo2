@@ -313,12 +313,14 @@ std::optional<FileTags> PluginRegistry::scanTags(const std::wstring& file, uint3
         out.trackCount = count;
 
         if (count > 1) {
-            // 複数曲: dwNumber=0 でファイル全体(アルバム相当)の情報を取得
+            // 複数曲: dwNumber=0 でファイル全体(アルバム相当)の情報を取得。
+            // Select は切り替え後の曲番号を返すため dwNumber=0 では 0 が正常値
+            // (0 以外を返すと KbMedia Player 本体の処理が先に進まない)。
+            // 戻り値で成否を判定出来ないので、通知されたタグは常に取り込む
             ComPtr<TagSink> sink;
             sink.attach(new TagSink);
-            if (dec->Select(0, nullptr, sink.get(), tagFields)) {
-                sink->harvest(&out.album);
-            }
+            dec->Select(0, nullptr, sink.get(), tagFields);
+            sink->harvest(&out.album);
         }
         out.tracks.resize(count);
         for (DWORD i = 1; i <= count; ++i) {
