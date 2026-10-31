@@ -82,8 +82,8 @@ for (uint32_t n = 1; n <= s->trackCount(); ++n) {
 
 ## SDK・ライセンスについて
 
-`src/kpisdk/` は Kobarin 氏の KbMedia Player プラグイン SDK(kpisdk.7z、
-2017/03/06版)をビルド用に UTF-8 変換したコピー(内容は無変更。詳細は
-src/kpisdk/README-nokomo2.txt)。CP932 の原本は KbMedia Player 公式サイト
+`src/kpisdk/` は Kobarin 氏の KbMedia Player プラグイン SDK(2026/10/31版、
+KbMedia Player 3.17beta3 付属)の無変更のコピー(詳細は
+src/kpisdk/README-nokomo2.txt)。原本は KbMedia Player 公式サイト
 から入手出来る。SDK ドキュメントによりプラグインを使用するアプリケーションの
 作成・配布は許可されている(詳細はプラグインソースコード一式の readme.txt)。

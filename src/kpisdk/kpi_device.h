@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 #ifndef kpi_deviceH
 #define kpi_deviceH
 

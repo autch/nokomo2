@@ -20,7 +20,7 @@
 src/
   CMakeLists.txt
   include/nokomo/nokomo.hpp  公開 API(PluginRegistry / DecodeSession / FileTags)
-  kpisdk/                    KPI SDK のコピー(UTF-8 変換のみ、内容は無変更)
+  kpisdk/                    KPI SDK のコピー(原本のまま無変更)
   lib/host_objects.*         ホスト実装: IKpiFile(遅延オープン+mmap GetBuffer),
                              IKpiFolder(実ディレクトリ), IKpiTagInfo, IKpiConfig(INI),
                              IKpiUnkProvider
@@ -37,12 +37,13 @@ src/
 
 ## 仕様の典拠
 
-- 仕様の解釈で迷った場合は、**現行 SDK(src/kpisdk/ の kpi*.h と kmp_pi.h
-  2016/10/03版)を正**とする。旧仕様の再入要件などは時期により変遷しており、
+- 仕様の解釈で迷った場合は、**現行 SDK(src/kpisdk/ の kpi*.h 2026/10/31版
+  と kmp_pi.h 2016/10/03版)を正**とする。旧仕様の再入要件などは時期により変遷しており、
   過去のホスト実装(のこもDecoder 等)や個々のプラグインの挙動は実例・参考で
   あって典拠ではない
-- SDK ヘッダの原本は CP932。src/kpisdk/ には UTF-8 変換したコピーを置く
-  (MSVC は /utf-8 でビルドするため。更新手順は src/kpisdk/README-nokomo2.txt)
+- SDK ヘッダの原本は 2026/10/31版から UTF-8(BOM 付き)。それ以前は CP932 で、
+  UTF-8 変換が必要だった(MSVC は /utf-8 でビルドするため。更新手順は
+  src/kpisdk/README-nokomo2.txt)
 
 ## 開発時の検証ワークフロー(Linux)
 

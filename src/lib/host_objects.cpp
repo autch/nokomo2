@@ -72,11 +72,18 @@ static bool toAnsiStrict(const std::wstring& s, std::string* out)
 
 DWORD WINAPI LocalKpiFile::Read(void* pBuffer, DWORD dwSize)
 {
-    if (aborted_.load(std::memory_order_relaxed)) return 0;
-    HANDLE h = ensureHandle();
-    if (h == INVALID_HANDLE_VALUE) return 0;
+    if (!pBuffer || dwSize == 0) return 0;
     DWORD read = 0;
-    if (!ReadFile(h, pBuffer, dwSize, &read, nullptr)) return 0;
+    if (!aborted_.load(std::memory_order_relaxed)) {
+        HANDLE h = ensureHandle();
+        if (h != INVALID_HANDLE_VALUE && !ReadFile(h, pBuffer, dwSize, &read, nullptr)) {
+            read = 0;
+        }
+    }
+    // dwSize 未満しか読めなかった場合は残りを 0 で埋める(SDK 2026/10/31版)。
+    // プラグインはこれを前提にしてはならないが、未初期化領域の読み出しによる
+    // 不定動作を防ぐ多重防御として本体(KbMedia Player)と同じ挙動にする
+    if (read < dwSize) memset((BYTE*)pBuffer + read, 0, dwSize - read);
     return read;
 }
 
@@ -564,11 +571,13 @@ DWORD WINAPI MemoryConfig::GetStr(const wchar_t* sec, const wchar_t* key, wchar_
     std::wstring v;
     if (!findValue(sec, key, &v)) v = def ? def : L"";
     DWORD needed = (DWORD)((v.size() + 1) * sizeof(wchar_t));
-    // サイズ不足時は切り捨て(仕様)
-    size_t maxChars = (size_t)dwSize / sizeof(wchar_t) - 1;
-    size_t n = v.size() < maxChars ? v.size() : maxChars;
-    memcpy(pszValue, v.c_str(), n * sizeof(wchar_t));
-    pszValue[n] = 0;
+    // サイズ不足時は切り捨てずに空文字列を入れて必要サイズを返す(SDK 2026/10/31版)。
+    // 途切れたパスが想定外の場所を指す事故を避けるため
+    if (dwSize < needed) {
+        pszValue[0] = 0;
+        return needed;
+    }
+    memcpy(pszValue, v.c_str(), needed);
     return needed;
 }
 

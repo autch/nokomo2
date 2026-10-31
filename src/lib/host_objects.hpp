@@ -165,8 +165,19 @@ private:
     void load();
     void save();
 
+    // セクション名・キー名は大文字と小文字を区別しない(SDK 2026/10/31版)。
+    // ロケール非依存の Unicode 序数比較で大小を畳み込む
+    struct NameLess {
+        bool operator()(const std::wstring& a, const std::wstring& b) const
+        {
+            return CompareStringOrdinal(a.c_str(), (int)a.size(), b.c_str(), (int)b.size(),
+                                        TRUE) == CSTR_LESS_THAN;
+        }
+    };
+    using KeyMap = std::map<std::wstring, std::wstring, NameLess>;
+
     std::mutex m_;
-    std::map<std::wstring, std::map<std::wstring, std::wstring>> data_;
+    std::map<std::wstring, KeyMap, NameLess> data_;
     std::wstring iniPath_;
     bool dirty_ = false;
 };

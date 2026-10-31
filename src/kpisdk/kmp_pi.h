@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 #ifndef KMP_PI_H
 #define KMP_PI_H
 

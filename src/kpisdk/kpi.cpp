@@ -1,4 +1,4 @@
-#include <windows.h>
+﻿#include <windows.h>
 #include "kpi.h"
 #include "kpi_impl.h"
 
@@ -66,7 +66,12 @@ DWORD WINAPI kpi_CreateConfig(IKpiUnknown *pUnknown, //kpi_CreateInstance の第
         pProvider->Release();//pProvider が不要なら ppConfig を解放後でなくても解放可能
         return dwRet;
     }
-    *ppConfig = NULL;
+    //プラグインの呼び出し側(通常は KbMedia Player 本体)が IKpiConfig に未対応
+    //常にデフォルト値を返す IKpiConfig を返す
+    *ppConfig = new KbKpiNullConfig;
+    if(pdwPlatform){
+        *pdwPlatform = (DWORD)-1;
+    }
     return 0;
 }
 /*
