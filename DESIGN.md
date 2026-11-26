@@ -230,7 +230,10 @@ kpisdk_for_ai_decoder.md 6-14 に明記されている。仕様上の不明点�
 - **インスタンス数の上限**: `acquireSlot()` は空きを待つため、入れ子の
   中で待つと同様に固まりうる。本体は上限超過時に kbrunkpi 経由の
   デコーダを返すが、nokomo2 には別プロセス実行がない。入れ子のときは
-  待たずに失敗にする(本体も KPI_MULTINST_UNIQUE の使用中は失敗)
+  待たずに失敗にする(本体も KPI_MULTINST_UNIQUE の使用中は失敗)。
+  呼ぶ側が同じプラグインのデコーダを多数同時に保持する作り(kbbms)では、
+  上限のあるプラグインだと同一スレッド上で自分の解放を待つことになり、
+  確実に固まる
 - **返すデコーダのプロキシ**: 使われる側の LoadedModule とスロットを
   デコーダの寿命まで保持し、Open・Select・Seek・Render の間は入れ子
   スタックに積んでおく必要がある。また cpRequest の nBitsPerSample が
@@ -246,9 +249,24 @@ kpisdk_for_ai_decoder.md 6-14 に明記されている。仕様上の不明点�
 - 使われる側が旧仕様プラグインで、呼んだプラグインの渡した IKpiFile が
   実ファイル名(GetRealFileA)を返さない場合は失敗する
 
-実例は本体同梱の kbbms(BMS)。キー音の .wav(無ければ同名の
-.mp3 / .ogg)をホストから受け取った IKpiFolder で開き、nBitsPerSample=16
-を要求して 16bit 以外が返ると読み込みを諦めるので、ビット数の変換は
-必須。kbbms は IKpiVideoWindow にも対応しているが、仕様上この対応は
-任意で、CreateVideoWindow を呼ばないホストでは映像のない曲として演奏
-されるため、kpi_CreateDecoder さえ提供すれば音声の変換は出来る見込み。
+実例は本体同梱の kbbms(BMS)。公開されているソース(2026/10/13版)での
+使い方は次のとおり。
+
+- 呼ぶ時機: Open では呼ばず、最初の Seek でキー音をすべて
+  kpi_CreateDecoder で開き、Select・Seek(0) まで済ませる。中身は
+  Render の中で、そのキー音が鳴るときに少しずつ使われる側の Render を
+  呼んで読み込む(読み終えたデコーダから解放)。nokomo2 はデコーダの
+  Seek・Render をモジュールの `callLock` なしで呼ぶので、kbbms については
+  上記の ABBA デッドロックは起きない(使われる側の .wav / .ogg / .mp3 の
+  プラグインが kpi_CreateDecoder を呼ばないため)
+- 同時に生きるデコーダの数: キー音の数(数百になりうる)だけ、使われる
+  側のデコーダが同時に開いたままになる。インスタンス数の上限で待つと
+  固まるのは前述のとおり
+- 開くファイル: キー音の .wav(無ければ同名の .mp3 / .ogg)を、ホストから
+  受け取った IKpiFolder で開く。.wav も本体の内蔵ではなくプラグイン
+  (本体同梱では kbdshow)が扱う
+- ビット数: nBitsPerSample=16 を要求し、16bit 以外が返ると読み込みを
+  諦めるので、ホスト側の変換は必須。1ch / 2ch 以外も読み込まない
+- 映像: 本体同梱の版は IKpiVideoWindow にも対応しているが、仕様上この
+  対応は任意で、CreateVideoWindow を呼ばないホストでは映像のない曲として
+  演奏されるため、kpi_CreateDecoder さえ提供すれば音声の変換は出来る見込み
