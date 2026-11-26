@@ -59,9 +59,13 @@ RawModule loadRaw(const std::wstring& path, HostContext& ctx, std::wstring* reas
         return r;
     }
     ctx.currentPluginKey = stemOf(path);
+    ctx.currentPluginPath = path;
+    ctx.loadingThread.store(GetCurrentThreadId());
     void* pv = nullptr;
     HRESULT hr = fn(IID_IKpiDecoderModule, &pv, ctx.root.get());
+    ctx.loadingThread.store(0);
     ctx.currentPluginKey.clear();
+    ctx.currentPluginPath.clear();
     if (FAILED(hr) || !pv) {
         *reason = L"デコーダプラグインではない(IID_IKpiDecoderModule 非対応)";
         FreeLibrary(h);

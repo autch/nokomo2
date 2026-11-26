@@ -16,12 +16,17 @@
 //   --list                認識しているプラグインを一覧表示して終了
 //   --tags                変換せずタグ情報を表示(タグ専用オープンの動作確認)
 //   --no-cache            プラグイン情報キャッシュを使わない
+//   --work-dir <dir>      プラグイン用作業フォルダ(IKpiWorkFolder)の親ディレクトリ
+//                         (省略時は %TEMP%\nokomo2)
+//
+// プラグインからのお知らせ(IKpiMessenger)は標準エラー出力に表示する。
 
 #include <fcntl.h>
 #include <io.h>
 
 #include <cstdio>
 #include <cstdlib>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -72,6 +77,28 @@ void printAttempts(FILE* to, const std::vector<OpenAttempt>& attempts)
     }
 }
 
+// IKpiMessenger: プラグインの任意のスレッドから呼ばれ得るので出力を直列化する
+void printPluginMessage(const PluginMessage& m)
+{
+    static std::mutex mtx;
+    std::lock_guard<std::mutex> lock(mtx);
+    std::wstring who = m.pluginPath.empty() ? L"プラグイン" : nd::fileNameOf(m.pluginPath);
+    // 進捗表示(\r で上書きしている行)を壊さないよう行頭から書く
+    fwprintf(stderr, L"\r  [お知らせ: %ls]%ls%ls\n", who.c_str(),
+             m.fileName.empty() ? L"" : L" ", m.fileName.c_str());
+    // 本文は複数行のことがあるので各行を字下げする
+    size_t pos = 0;
+    while (pos <= m.text.size()) {
+        size_t eol = m.text.find(L'\n', pos);
+        if (eol == std::wstring::npos) eol = m.text.size();
+        std::wstring line = m.text.substr(pos, eol - pos);
+        if (!line.empty() && line.back() == L'\r') line.pop_back();
+        fwprintf(stderr, L"    %ls\n", line.c_str());
+        pos = eol + 1;
+    }
+    fflush(stderr);
+}
+
 std::wstring formatTime(uint64_t frames, uint32_t rate)
 {
     if (frames == kUnknown64 || rate == 0) return L"??:??";
@@ -85,6 +112,7 @@ struct Options {
     std::vector<std::wstring> pluginDirs;
     std::vector<std::wstring> dllDirs;
     std::wstring outDir;
+    std::wstring workDir;
     DecodeRequest req;
     int32_t outBits = 0; // 0=ネイティブ
     uint32_t track = 0;  // 0=全曲
@@ -140,7 +168,7 @@ bool convertOne(PluginRegistry& reg, const Options& opt, const std::wstring& inp
 
         const int32_t outBits = opt.outBits ? opt.outBits : mi.bitsPerSample;
         nd::WavWriter wav;
-        if (!wav.open(outPath, mi.sampleRate, mi.channels, outBits, opt.forceRf64)) {
+        if (!wav.open(outPath, mi.sampleRate, mi.channels, outBits, mi.channelMask(), opt.forceRf64)) {
             fwprintf(stderr, L"  曲 %u: 出力ファイルを開けない: %ls\n", n, outPath.c_str());
             allOk = false;
             continue;
@@ -231,6 +259,7 @@ int wmain(int argc, wchar_t** argv)
         else if (a == L"--tags") opt.tagsOnly = true;
         else if (a == L"--no-cache") opt.noCache = true;
         else if (a == L"--rf64") opt.forceRf64 = true;
+        else if (a == L"--work-dir") opt.workDir = next(a.c_str());
         else if (a == L"-h" || a == L"--help") {
             fwprintf(stdout,
                 L"nkmconv - KbMedia Player デコーダプラグインによる WAV 変換\n"
@@ -247,7 +276,8 @@ int wmain(int argc, wchar_t** argv)
                 L"  --list                プラグイン一覧表示\n"
                 L"  --tags                タグ情報のみ表示\n"
                 L"  --no-cache            プラグイン情報キャッシュを使わない\n"
-                L"  --rf64                常に RF64 で出力(既定: 4GiB 超過時に自動昇格)\n");
+                L"  --rf64                常に RF64 で出力(既定: 4GiB 超過時に自動昇格)\n"
+                L"  --work-dir <dir>      プラグイン用作業フォルダの親(既定: %%TEMP%%\\nokomo2)\n");
             return 0;
         }
         else if (!a.empty() && a[0] == L'-') {
@@ -276,6 +306,8 @@ int wmain(int argc, wchar_t** argv)
     // CLI はプロセス終了まで使うので解除(removeDllSearchDirectory)は行わない。
     for (const auto& dir : opt.dllDirs) hostOpt.dllSearchDirs.push_back({dir, nullptr});
     if (opt.defaultLengthMs) hostOpt.defaultLengthMs = opt.defaultLengthMs;
+    hostOpt.onPluginMessage = printPluginMessage;
+    hostOpt.workFolderRoot = opt.workDir;
 
     PluginRegistry reg(hostOpt);
     reg.loadCache();

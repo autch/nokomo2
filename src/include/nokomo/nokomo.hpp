@@ -14,6 +14,7 @@
 #include <windows.h>
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -68,14 +69,27 @@ struct PluginInfo {
     // 表示用の短い識別名: "kbflac.kpi v30" 形式(ファイル名 + dwPluginVersion)。
     // cszDescription は自由文で長いため、使用プラグインの提示にはこちらを推奨。
     std::wstring displayName() const;
-    // タグ専用オープン(Open(cpRequest=NULL))を呼んで良いか
-    // (KPI_DECODER_MODULEINFO::TAG_TITLE が立っている場合のみ許される)
-    bool canTagOnlyOpen() const;
+    // タグ専用オープン(Open(cpRequest=NULL))を呼んで良いか。
+    // KPI_DECODER_MODULEINFO::TAG_TITLE が立っているか、1ファイル複数曲の拡張子
+    // (cszMultiSongExts)なら許される(後者は曲数を得るため、dwSupportTagInfo に
+    // 関わらず開く。SDK 2026/11/25版で明記)
+    bool canTagOnlyOpen(const std::wstring& extLower) const;
 };
 
 // AddDllDirectory が返す Cookie(PVOID)。SDK ヘッダのバージョン差を避けるため
 // 独自の別名で公開する(値は RemoveDllDirectory にそのまま渡せる)。
 using DllDirCookie = void*;
+
+// プラグインから利用者へのお知らせ(IKpiMessenger::Notify)。
+struct PluginMessage {
+    std::wstring pluginPath;          // 通知したプラグイン(特定出来なければ空)
+    std::wstring fileName;            // 関わるファイル名(特定のファイルに関わらなければ空)
+    std::wstring text;                // 本文(改行・タブ以外の制御文字は空白に置換済み)
+};
+// プラグインの任意のスレッドから、プラグインが自分のロックを持ったまま呼ばれ得る。
+// スレッドセーフにし、すぐに戻ること。PluginRegistry / DecodeSession を呼んではならない
+// (モジュールの排他ロック保持中に呼ばれることがありデッドロックする)。
+using PluginMessageHandler = std::function<void(const PluginMessage&)>;
 
 // AddDllDirectory / RemoveDllDirectory の薄いラッパ。
 // これらの API は Win8 未満(未更新の Win7)に存在しないため動的解決しており、
@@ -106,6 +120,15 @@ struct HostOptions {
         DllDirCookie cookie = nullptr;
     };
     std::vector<DllSearchDir> dllSearchDirs;
+
+    // IKpiMessenger(利用者へのお知らせ)の受け取り先。空ならプラグインに
+    // IKpiMessenger を提供しない(プラグインは自前の方法で知らせるか何もしない)
+    PluginMessageHandler onPluginMessage;
+
+    // IKpiWorkFolder(プラグイン用の作業フォルダ)を作る親ディレクトリ。
+    // 空: %TEMP%\nokomo2。作業フォルダはプラグインの最後の Release で中身ごと削除し、
+    // 使用中で消せなかった分は PluginRegistry の破棄時(全モジュール解放後)に再試行する
+    std::wstring workFolderRoot;
 };
 
 struct TagPicture {
@@ -150,13 +173,31 @@ struct DecodeRequest {
     uint64_t fadeMs = kUnknown64;     // kUnknown64 = データ推奨値 → HostOptions 既定の順
 };
 
+// チャンネル数で決まる標準のスピーカー配置(KPI_MEDIAINFO::dwSpeakerConfig=0 の意味。
+// WAVEFORMATEXTENSIBLE::dwChannelMask と同じ値)。1〜8ch 以外は 0
+constexpr uint32_t defaultChannelMask(uint32_t channels)
+{
+    switch (channels) {
+    case 1: return 0x4;   // FC
+    case 2: return 0x3;   // FL FR
+    case 3: return 0x7;   // FL FR FC
+    case 4: return 0x33;  // FL FR BL BR
+    case 5: return 0x37;  // FL FR FC BL BR
+    case 6: return 0x3F;  // FL FR FC LFE BL BR
+    case 7: return 0x70F; // FL FR FC LFE BC SL SR
+    case 8: return 0x63F; // FL FR FC LFE BL BR SL SR
+    default: return 0;
+    }
+}
+
 // KPI_MEDIAINFO のコピー + ホストが解決した実効値
 struct MediaInfo {
     uint32_t trackNumber = 0;
     uint32_t trackCount = 0;
     uint32_t sampleRate = 0;
     int32_t bitsPerSample = 0;        // 負値 = float
-    uint32_t channels = 0;
+    uint32_t channels = 0;            // 1〜8
+    uint32_t speakerConfig = 0;       // dwSpeakerConfig(0=標準配置。不正値は 0 に正規化済み)
     uint32_t formatType = 0;          // KPI_MEDIAINFO::FORMAT_PCM/DOP
     uint64_t length100ns = 0;         // 1ループ目の長さ(100ns)。kUnknown64=不明
     uint64_t loop100ns = 0;           // 2ループ目以降1ループの長さ。0=非ループ, kUnknown64=不明
@@ -171,6 +212,8 @@ struct MediaInfo {
 
     uint32_t bytesPerSample() const { return (uint32_t)(bitsPerSample < 0 ? -bitsPerSample : bitsPerSample) / 8; }
     uint32_t bytesPerFrame() const { return bytesPerSample() * channels; }
+    // 実際のスピーカー配置(speakerConfig=0 なら標準配置)
+    uint32_t channelMask() const { return speakerConfig ? speakerConfig : defaultChannelMask(channels); }
 };
 
 namespace detail { struct SessionImpl; }

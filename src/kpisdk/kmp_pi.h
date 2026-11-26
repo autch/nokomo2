@@ -12,7 +12,7 @@
 
    実際のプラグインのソースコードは
 
-   http://hwm5.gyao.ne.jp/kobarin/kpi/kpi.htm
+   https://kobarin.sakura.ne.jp/kpi/kpi.htm
 
    にあります。
 
@@ -53,7 +53,7 @@
      ・SetValue(NULL, NULL) に関する記述を修正（プラグイン仕様そのものは変更なし）
    ・2015/08/09
      ・SZ_KMP_TAGINFO_NAME_XXXX を色々追加
-       ・ORIGARTIST/COPYRIGHT/COMPOSER/PERFORMER/DISCID/ENCODED_BY/ECONDEING_SETTINGS
+       ・ORIGARTIST/COPYRIGHT/COMPOSER/PERFORMER/DISCID/ENCODED_BY/ENCODING_SETTINGS
    ・2015/06/14
      ・kmp_GetTestTagInfo を追加
      ・量子化ビット数に 64bit float を追加
@@ -97,7 +97,7 @@ typedef struct
     DWORD dwReserved2;    //１ファイル複数曲の場合に 1, １ファイル１曲のときに 0
                           //dwReserved2 == 1 の場合、dwLength には曲数を 1000 倍した値を返すこと。
                           //dwReserved2 == 1 の場合、SetPosition の dwPos に(曲番号 * 1000)が渡される
-                          //ようになり、シークは出来なくなるので dwSeek == 0 とすること。
+                          //ようになり、シークは出来なくなるので dwSeekable == 0 とすること。
                           //現在の仕様では、１ファイル複数曲の拡張子は KbMedia Player 本体で決め打ち
                           //されており、本体が知らない拡張子に対してこの値を 1 にしても正常には動作
                           //しないし、本体が１ファイル複数曲として扱っている形式に対してこの値を 0 に
@@ -114,8 +114,7 @@ typedef struct
     //この値が KbMedia Player が期待する値と一致しない場合は、KbMedia Player
     //によって直ちに FreeLibrary が呼ばれる。
     //その場合、Init() も Deinit() も呼ばれないことに注意。
-    //dwVersion == KMPMODULE_VERSION_NEW の場合、OpenFromStream の方を
-    //呼び出すようになる(正式版公開時には廃止予定)
+    //(2015/11/03 の暫定仕様の KMPMODULE_VERSION_NEW と OpenFromStream は 2015/11/30 に廃止した)
     DWORD dwPluginVersion;
     //プラグインのバージョン
     //対応拡張子が競合するプラグインが見つかった場合は、数字が大きいものを優先的に使う
@@ -133,7 +132,7 @@ typedef struct
     const char  **ppszSupportExts;
     //対応拡張子の文字列の配列(ピリオド含む)
     //NULL で終わるようにする
-    //例：ppszSupportExts = {".mp1", ".mp2", ".mp3", "rmp", NULL};
+    //例：ppszSupportExts = {".mp1", ".mp2", ".mp3", ".rmp", NULL};
     //
     //ppszSupportExts == {NULL} (ppszSupportExts == NULL は不可）で、かつ Init と Deinit
     //が 非 NULL の場合は常駐プラグインとして扱われ、KbMedia Player が動作中は常にロード
@@ -177,7 +176,7 @@ typedef struct
     //エラーでない場合は pInfo に適切な情報を入れること。適切な情報が入って
     //いない場合（dwBitsPerSample が 0 など）は KbMedia Player によって直ちに Close
     //が呼ばれる。
-    //Open に渡された pInfo->dwSampleRate/dwBitsPerSample/dwChannels の各値が 0 以外の
+    //Open に渡された pInfo->dwSamplesPerSec/dwBitsPerSample/dwChannels の各値が 0 以外の
     //場合、可能ならそれに従った形式（または最も近い形式）でファイルを開くようにすること。
     //（例えば pInfo->dwBitsPerSample == -64(64bit float) になっている場合、可能なら
     //  64bit float で、64bit float が不可能でも 32bit int なら対応しているなら 32bit int
@@ -283,7 +282,7 @@ typedef DWORD (WINAPI *pfnKmpConfig)(HWND hWnd, DWORD dwVersion, DWORD dwReserve
 #define SZ_KMP_NAME_COPYRIGHT_W   L"Copyright"   //著作権
 #define SZ_KMP_NAME_COPYRIGHT   _T("Copyright")  //著作権
 
-#define SZ_KMP_NAME_LYRICIST_A     "Lyricist"    //作曲者
+#define SZ_KMP_NAME_LYRICIST_A     "Lyricist"    //作詞者
 #define SZ_KMP_NAME_LYRICIST_W    L"Lyricist"    //作詞者
 #define SZ_KMP_NAME_LYRICIST    _T("Lyricist")   //作詞者
 
@@ -391,28 +390,28 @@ typedef BOOL (WINAPI *pfnGetTagInfo)(const char *cszFileName, IKmpTagInfo *pInfo
 //    WCHAR *wszArtist; //Unicode
 //    char  *szU8Album; //Utf8
 //    ...
-//    pInfo->aSetValueA(SZ_KMP_TAGINFO_NAME_TITLE, szTitle);
-//    pInfo->aSetValueW(SZ_KMP_TAGINFO_NAME_ARTIST, szArtist);
-//    pInfo->aSetValueU8(SZ_KMP_TAGINFO_NAME_ALBUM, szU8Album);
-//    pInfo->aSetValueA(SZ_KMP_TAGINFO_NAME_BITRATE, "128kbps");
+//    pInfo->aSetValueA(SZ_KMP_NAME_TITLE_A, szTitle);
+//    pInfo->aSetValueW(SZ_KMP_NAME_ARTIST_A, wszArtist);
+//    pInfo->aSetValueU8(SZ_KMP_NAME_ALBUM_A, szU8Album);
+//    pInfo->aSetValueA(SZ_KMP_NAME_BITRATE_A, "128kbps");
 //    ...
 //    return TRUE;
 //}
 //
-//SetValueA/W/U8 はそれぞれ Ansi/Unicode/Utf8
+//aSetValueA/W/U8 はそれぞれ Ansi/Unicode/Utf8
 //
 //cszName は大文字と小文字を区別しない
-//cszName で扱えるのは KMP_TAGINFO_NAME_XXXX だが、未定義の文字列も渡すことが出来る。
+//cszName で扱えるのは SZ_KMP_NAME_XXXX_A だが、未定義の文字列も渡すことが出来る。
 //未定義の文字列を渡すと、「ドキュメント」部に <> で括られた形で名前と値が表示される。
-//その場合の表示の順序は SetValueX で渡された順序になり、cszName は渡された文字列
+//その場合の表示の順序は aSetValueX で渡された順序になり、cszName は渡された文字列
 //そのものになる。(同じ cszName を 2回以上渡しても 2回目以降は無視される)
 //
-//SetValueA(ANSI) と SetValueW(UNICODE) と SetValueU8(UTF8) は混在して使用可能
+//aSetValueA(ANSI) と aSetValueW(UNICODE) と aSetValueU8(UTF8) は混在して使用可能
 //3 種類用意したのはプラグイン側での文字コードの変換の手間を省くため
 //同じ Value 値をわざわざ 3 種類の文字コードで指定して呼ぶ必要はない
-//    pInfo->aSetValueA(SZ_KMP_TAGINFO_NAME_TITLE, "たいとる");
-//    pInfo->aSetValueW(SZ_KMP_TAGINFO_NAME_TITLE, L"たいとる");
-//    pInfo->aSetValueU8(SZ_KMP_TAGINFO_NAME_TITLE, (utf8の)"たいとる");
+//    pInfo->aSetValueA(SZ_KMP_NAME_TITLE_A, "たいとる");
+//    pInfo->aSetValueW(SZ_KMP_NAME_TITLE_A, L"たいとる");
+//    pInfo->aSetValueU8(SZ_KMP_NAME_TITLE_A, (utf8の)"たいとる");
 //のような呼び方は不要
 //
 //KbMedia Player は、以下の順序でタグ情報を取得する。
@@ -425,20 +424,20 @@ typedef BOOL (WINAPI *pfnGetTagInfo)(const char *cszFileName, IKmpTagInfo *pInfo
 //任せたければ、ビットレート情報だけを通知すれば良い。
 //
 //逆に全ての情報取得を自身で行い、本体の取得を省略させたい場合は、
-//一番最初に aSetValueA(NULL, NULL) を呼び出す(SetValueW/SetValueU8 でも可)
+//一番最初に aSetValueA(NULL, NULL) を呼び出す(aSetValueW/aSetValueU8 でも可)
 //例：
-//    pInfo->aSetValueA(NULL, NULL);//SetValueW(NULL, NULL)/SetValueU8(NULL, NULL)も OK
+//    pInfo->aSetValueA(NULL, NULL);//aSetValueW(NULL, NULL)/aSetValueU8(NULL, NULL)も OK
 //    pInfo->aSetValueA("bitrate", "128kbps");
 //    pInfo->aSetValueA("title", "タイトル");
 //この場合、2 でアーティスト情報等を取得出来ても、1 で取得した情報しか表示しない。
 //
-//SetValue(NULL, NULL) がない場合、cszName が指定されてないものに関しては 2 で取得
+//aSetValueX(NULL, NULL) がない場合、cszName が指定されてないものに関しては 2 で取得
 //出来れば表示する。上記の例では、アーティスト情報を 2 で得た場合はアーティスト情報
 //も表示する。
 //
 //1,2 で同じ cszName に対して異なる cszValue が得られた場合、1 で取得した方を採用する
 //従って、
-//    pInfo->SetValueA("title", "");
+//    pInfo->aSetValueA("title", "");
 //のように呼び出すと、2 で異なるタイトルを得てもタイトルは "" となる。
 //
 #endif

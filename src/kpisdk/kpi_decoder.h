@@ -9,6 +9,9 @@
 /*デコーダプラグイン
   オーディオデータを PCM にデコード
 
+  AI(Claude 等)がプラグインを作成・修正する場合は、kpi.h と合わせて
+  kpisdk_for_ai.md(入口。種類ごとに読むものの表がある)を必ず読むこと。
+
   旧仕様(kmp_pi.h)で出来なかったループに関する細かな制御、1ファイル複数曲に
   きちんと対応。
 
@@ -33,7 +36,7 @@
   *ppvObject にインスタンスを渡す場合は、適切な型にキャストすること。
   例えば、
 
-    if(IsEqualIID(riid, IID_IKpiDecoderModule){
+    if(IsEqualIID(riid, IID_IKpiDecoderModule)){
         CKpiXXXDecoderModule *pModule = new CKpiXXXDecoderModule;
         // *ppvObject = pModule; //NG
         *ppvObject = (IKpiDecoderModule*)pModule; //OK
@@ -55,7 +58,7 @@ class __declspec(uuid("{2F02A4B1-F3FA-4725-AE31-54EA8A1EB095}")) IKpiDecoderModu
 struct KPI_DECODER_MODULEINFO
 {
     enum{
-        TAG_TITLE  = 0x01,   //タイトル取得対応(Media クスプローラでの表示用情報)
+        TAG_TITLE  = 0x01,   //タイトル取得対応(Media エクスプローラでの表示用情報)
         TAG_EXTRA  = 0x01<<1,//詳細(デコード用に開いたときだけ取得可能な情報)対応
         TAG_DECODER_EXCLUSIVE = 0x01<<2,//デコード中にタグ取得不可(未実装)
             //dwMultipleInstance が KPI_MULTINST_ZERO かそれ以外かでも違いがある(後述)
@@ -100,23 +103,33 @@ struct KPI_DECODER_MODULEINFO
       ・デバッグが困難になるので、デバッグモードでは KPI_MULTINST_ONE にすると良い
     dwSupportTagInfo :TAG_TITLE/EXTRA 各フラグの組み合わせ
       0:         タグ取得非対応
-      TAG_TITLE: タイトル取得対応(Media クスプローラでの表示用情報)
+      TAG_TITLE: タイトル取得対応(Media エクスプローラでの表示用情報)
          タグ取得専用モードでの情報取得に対応していればセットする。
          Open の第1引数(cpRequest) と Select の第2引数(ppMediaInfo) が NULL
          のときがタグ取得専用で開く
          セットされていないときは Media エクスプローラで情報表示時に Open が
-         呼ばれない。
+         呼ばれない。(1ファイル複数曲の拡張子は例外。後述)
       TAG_EXTRA:  詳細(デコード用に開いたときだけ取得可能な情報)対応
          デコード用に開いた時だけ取得可能な情報がある場合にセット。
          Open の第1引数(cpRequest) と Select の第2引数(ppMediaInfo) が共に非NULL
          の場合がデコード用で開く
-      TAG_DECODER_EXCLUSIVE: デコード中は別プロセス経由でタグ取得
+         (2026/11/25 明記)今の本体は、このフラグを設定画面の表示にだけ使う。立てても立てなくても、
+         デコード用に開いたときは Select に pTagInfo と KPI_TAGGET_FLAG_ALL が渡される
+         (CueSheet の曲を再生するときは pTagInfo が NULL。Select の説明を参照)
+      TAG_DECODER_EXCLUSIVE: デコード中は別プロセス経由でタグ取得(未実装)
          ライブラリの仕様上デコード中にタグ取得出来ない場合はセットする。
          セットされているときは別プロセス経由でタグ取得を行う
+         (2026/11/25 明記)今の本体は未実装で、このフラグを見ていない。以下の
+         TAG_DECODER_EXCLUSIVE の説明は予定の動作で、今の本体はセットされていない場合と同じに扱う
+         (タグ取得は、デコード中であっても本体プロセスから行う)
+         (経緯：実際に、再生中は別の曲のタグを取得できない外部のライブラリがあり、そのために用意した。
+          その後ライブラリのソースが配布され、プラグインの側で対処できるようになったので、今この
+          フラグを使うプラグインはない。同じ制限のあるライブラリのために残してある。必要になったら
+          本体の側で、デコード中のタグ取得を別プロセス(kbrunkpi.exe)経由にする処理を足す)
 
       タイトル/アーティストの取得は非対応(本体に任せる)だがその他の追加情報の取得
       には対応する場合は TAG_TITLE はセットしないで TAG_EXTRA だけをセットする
-      (デコード用以外では Open を呼ばない)
+      (デコード用以外では Open を呼ばない。1ファイル複数曲の拡張子は例外。後述)
 
       TAG_DECODER_EXCLUSIVE がセットされている場合、再生用にデコーダを Open して
       いる場合は別プロセス経由でタグ取得を行う(滅多にないと思うが、再生中の曲しか
@@ -131,11 +144,24 @@ struct KPI_DECODER_MODULEINFO
 
       dwSupportTagInfo=0 のときは Media エクスプローラでのタイトル取得にプラグインは
       使用されない(Open が呼ばれない)
+
+      ただし、cszMultiSongExts に含まれる拡張子(1ファイル複数曲)のファイルは、
+      dwSupportTagInfo の値に関わらず(0 でも)タグ取得用に開かれる。(2026/11 明記)
+      (ファイルに含まれる曲の数を知る手段が Open の戻り値しかないため)
+      演奏リストへの追加時と、Media エクスプローラで曲ごとに展開して表示する
+      ときに、Open(cpRequest=NULL) の後、全ての曲に対して
+      Select(曲番号, ppMediaInfo=NULL, ...) が呼ばれる。
+      cszMultiSongExts に拡張子を含める場合は、TAG_TITLE をセットしていなくても
+      cpRequest==NULL の Open と ppMediaInfo==NULL の Select に対応すること。
+      (タイトル取得に対応しない場合、Select では何も通知せずに dwNumber を返せば良い)
+
       (dwSupportTagInfo&TAG_TITLE) !=0 のときは Media エクスプローラでのタイトル
       取得時に
       ・Open の第1引数(cpRequest)に NULL
       ・Select の第2引数(ppMediaInfo)に NULL、第4引数の dwTagGetFlags に必要な情報
-        だけをセット(現在の実装では KPI_TAGGET_FLAG_TITLE|KPI_TAGGET_FLAG_ARTIST)
+        だけをセット(現在の実装では KPI_TAGGET_FLAG_TITLE|KPI_TAGGET_FLAG_ARTIST|KPI_TAGGET_FLAG_COPYRIGHT)
+        (COPYRIGHT を含めるのは、MIDI などアーティストの情報がない形式で、意味の近い情報(著作権)を
+         表示できるようにするため。2026/11/25 修正。以前は TITLE|ARTIST と書いていた)
 
       を渡して呼び出される。このとき、Select の第4引数(dwTagGetFlags) で指定して
       いない情報はなるべく通知しないこと(通知しても構わないが無視される)
@@ -145,11 +171,13 @@ struct KPI_DECODER_MODULEINFO
       ".mp1/.mp2/.mp3" のようにする
     cszMultiSongExts: 対応拡張子のうち 1つのファイルに複数の曲を含む可能性があるもの
       cszSupportExts の方にも含めていないと認識されない
-      cszSupportExts = ".aaa/.bbb;
+      cszSupportExts = ".aaa/.bbb";
       cszMultiSongExts = ".aaa/.ccc";
       例えば↑のような場合、.aaa と .bbb が対応拡張子と見なされ、そのうち拡張子 .aaa は
       1つのファイルに複数曲含む形式として認識されるが、拡張子 .ccc は無視される
       他のプラグインが拡張子 .ccc に対応していても影響しない
+      ここに含めた拡張子のファイルは、dwSupportTagInfo の値に関わらずタグ取得用
+      (cpRequest==NULL)に開かれる。(dwSupportTagInfo の説明を参照)
 */
 };
 ///////////////////////////////////////////////////////////////////////////////
@@ -172,8 +200,14 @@ struct KPI_MEDIAINFO
     DWORD  dwSampleRate;   //再生周波数(44100, 48000 etc...)
     INT32  nBitsPerSample; //量子化ビット数(8bit, 16bit, 24bit, 32bit, -32bit, -64bit)
                            //float の場合、値を負にする(32bit float => -32, 64bit float => -64)
-    DWORD  dwChannels;     //チャネル数(1 or 2)
-    DWORD  dwSpeakerConfig;//0(マルチチャンネル対応のために予約)
+    DWORD  dwChannels;     //チャネル数(1〜8)
+                           //3ch 以上に対応していない古い本体は、3ch 以上の曲を再生できない(開くのに失敗する)
+    DWORD  dwSpeakerConfig;//スピーカー配置(WAVEFORMATEXTENSIBLE::dwChannelMask と同じ値。SPEAKER_FRONT_LEFT など)
+                           //0 はチャネル数で決まる標準の配置
+                           //  1ch: FC, 2ch: FL FR, 3ch: FL FR FC, 4ch: FL FR BL BR, 5ch: FL FR FC BL BR,
+                           //  6ch: FL FR FC LFE BL BR, 7ch: FL FR FC LFE BC SL SR, 8ch: FL FR FC LFE BL BR SL SR
+                           //データはビットの小さい順に並べる(形式によって並びが違う場合はプラグインが並べ替える)
+                           //立っているビットの数が dwChannels と合わない値は、本体が 0 として扱う
     UINT64 qwLength;       //１ループ目(イントロ＋ループ１回)の曲の長さ(単位は100ナノ秒)
     UINT64 qwLoop;         //２ループ目以降の１ループの長さ(単位は100ナノ秒)
     UINT64 qwFadeOut;      //フェードアウト時間(単位は100ナノ秒)(フェードアウトしない場合は 0, 本体の設定に従う場合は-1)
@@ -189,7 +223,7 @@ struct KPI_MEDIAINFO
            //精度は悪いがシークに対応する場合は SEEK_FLAGS_ROUGH をセット
            //シークの精度: SAMPLE > ACCURATE > ROUGH
            //シークの速度: ROUGH > ACCURATE > SAMPLE
-           //(全部対応する場合は dwSeekableFlag = SEEK_FLAGS_SAMPLE | SEEK_FLAGS_ACCURATE | SEEK_FLAGS_ROUGH となる)
+           //(全部対応する場合は dwSeekableFlags = SEEK_FLAGS_SAMPLE | SEEK_FLAGS_ACCURATE | SEEK_FLAGS_ROUGH となる)
     DWORD  dwVideoWidth;   //映像の横幅(100%時)(映像情報を持たない場合は 0)
     DWORD  dwVideoHeight;  //映像の高さ(100%時)(映像情報を持たない場合は 0)
     DWORD  dwReserved[6];  //予約(0 にすること)
@@ -291,6 +325,9 @@ public:
       選曲する(dwNumber=曲番号 は 1 ベース、曲番号0 は存在しない)
       KbMedia Player は Render/Seek の前に必ず Select を呼び出す。
 
+      dwNumber に IKpiDecoderModule::Open が返した曲数より大きい値が渡されることはない。
+      (渡した結果は未定義。プラグインは曲番号の範囲を確かめなくて良い)
+
       1ファイル1曲の場合は dwNumber は常に 1 が渡される。
       1ファイル複数曲の場合は dwNumber に 0 が渡されることがある。この場合は
       オープンしているデータ全体を1つの曲またはアルバムと見なしてのタグ取得を
@@ -329,8 +366,15 @@ public:
       ppMediaInfo!=NULL のとき、*ppMediaInfo に曲の長さや再生周波数等の情報を
       入れる。*ppMediaInfo の寿命は次に IKpiDecoder のメソッドが呼ばれるまで。
       切り替え直後の再生位置は未定義(本体は Render 前に必ず Seek を呼び出す)
-      切り替えに成功したら切り替え後の曲番号を、失敗したら 0 を返し、*ppMediaInfo
-      に NULL を入れる。
+      切り替えに成功したら切り替え後の曲番号(dwNumber と同じ値)を返す。
+      失敗したら dwNumber と異なる値を返し、*ppMediaInfo に NULL を入れる。
+      dwNumber が 1 以上なら 0 を、dwNumber が 0 なら 0xFFFFFFFF を返すこと。
+      (本体は戻り値が dwNumber と等しいかどうかで成否を判断する。2026/11 明記)
+      dwNumber=0 で失敗を返すと、本体はそのファイルを開けないものとして扱う
+      (書庫内のファイルを演奏リストに追加しないなど)ため、ファイル全体のタグが
+      ないだけの場合は失敗にせず、0 を返すこと。
+      (古いプラグインは dwNumber=0 の失敗にも 0 を返すことがあるが、本体は成功
+       (タグなし)として扱う)
 
       Select に失敗後に Render/Seek した結果は未定義。(呼ばれないことを想定して良い)
       失敗しても、他の曲番号での Select は可能なら成功すること。
@@ -361,21 +405,27 @@ public:
         SEEK_FLAGS_ROUGH：   速度優先でシーク(ROUGH より高い精度も含めて未対応の場合は先頭に戻す)
 
       シークに対応しない場合は先頭に戻して 0 を返す。
-      歌詞がない曲を再生時は SEEK_FLAGS_ROUGH
-      歌詞が存在する曲を再生時は SEEK_FLAGS_ACCURATE
-      CueSheet 再生時は SEEK_FLAGS_SAMPLE を指定してシークする。
+      本体は、次のように dwFlag を指定してシークする(v3.17beta7 以降。2026/11/25 変更)。
+        SEEK_FLAGS_SAMPLE  ：CueSheet の曲、ループの始めへの戻り(ループタグ・qwLoop)、位置 0 への
+                             シーク、曲の頭出しなど正確な位置が要るとき
+        SEEK_FLAGS_ACCURATE：利用者のシークで、歌詞(時刻付きの歌詞・Lyrics3)・WRD・映像のある曲
+                             (表示を音の位置に合わせるため、戻り値が実際の音の位置と合っている必要がある)
+        SEEK_FLAGS_ROUGH   ：利用者のシークで、上のどれにも当たらない曲(速さ優先)
       指定した以上の精度でシークすること。(不可能なら先頭に戻すこと)
       (ROUGH 指定時に SAMPLE 精度は OK だが、SAMPLE 指定時に ROUGH 精度は NG)
+      精度によって処理の速さが変わらないなら、dwFlag を見ずに、いつも出来る限りの精度でシークして良い
+      (今のプラグインのほとんどはそうしている)。
 
-      Select の呼び出し前 or 失敗後の Seek の結果は未定義・
+      Select の呼び出し前 or 失敗後の Seek の結果は未定義。
 
-      dwFlag は実は本体が未だに未実装(汗；
-      常に SEEK_FLAGS_SAMPLE しか渡しておらず、公開中のプラグインのほぼ全てが
-      dwFlag を見ていない。
+      (2026/11/25 削除：「dwFlag は実は本体が未だに未実装(汗；常に SEEK_FLAGS_SAMPLE しか渡しておらず、
+       公開中のプラグインのほぼ全てが dwFlag を見ていない」。v3.17beta6 以前の本体は常に SEEK_FLAGS_SAMPLE を渡していた)
 
     DWORD WINAPI UpdateConfig(void *pvReserved);
       IKpiDecoderModule::ApplyConfig の呼び出しで KPI_CFGRET_NOTIFY が返された
       場合のみ、本体によってデコーダのインスタンスごとに呼ばれる。
+      (2026/11/25 明記)設定が変更された時点では呼ばれない。そのインスタンスで次に Render か
+      Seek を呼ぶ直前に、Render・Seek と同じスレッドから呼ばれる(Render・Seek と同時には呼ばれない)。
       呼ばれた時点で設定は既に変更済みであり、どの設定が変更されたかを知ること
       は出来ない。
       pvReserved は将来の予約(NULL が渡される)
@@ -443,13 +493,17 @@ public:
       IKpiDecoder::Select の ppMediaInfo にも NULL が渡されるようになる。
       この場合はファイルオープンの処理を最小限に抑えること。
       (データの有効性のチェックを省略しても良い)
-      IKpiTagInfo への情報通知もタイトルとアーティストだけで良い。
-      (タイトル/アーティスト以外の情報を通知しても構わないが無視される)
+      IKpiTagInfo への情報通知もタイトルとアーティスト(と著作権)だけで良い。
+      (それ以外の情報を通知しても構わないが無視される。Select の dwTagGetFlags に従えば良い)
+      再生できるファイルなら、タグを取得できなくても(TAG_TITLE がなくても)成功を返すこと。
+      cpRequest が NULL というだけで 0 を返してはいけない。(2026/11/23 追記。kpi_player.h と同じ)
 
       KPI_DECODER_MODULEINFO::dwSupportTagInfo==0 の場合は Media エクスプローラ
       での情報取得時に Open を呼ばない。タイトル取得は本体に任せて追加情報だけを
       取得する場合は dwSupportTagInfo を 0 にすることで Media エクスプローラの
       パフォーマンス低下を抑えることが出来る。
+      (cszMultiSongExts に含まれる拡張子のファイルは例外で、dwSupportTagInfo の値に
+       関わらず開かれる。KPI_DECODER_MODULEINFO::dwSupportTagInfo の説明を参照)
 
     BOOL WINAPI EnumConfig(IKpiConfigEnumerator *pEnumerator);
       設定項目を列挙する。

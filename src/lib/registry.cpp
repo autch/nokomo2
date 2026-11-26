@@ -56,9 +56,12 @@ bool PluginInfo::isMultiSongExtension(const std::wstring& extLower) const
     return false;
 }
 
-bool PluginInfo::canTagOnlyOpen() const
+bool PluginInfo::canTagOnlyOpen(const std::wstring& extLower) const
 {
-    return (supportTagInfo & KPI_DECODER_MODULEINFO::TAG_TITLE) != 0;
+    if (supportTagInfo & KPI_DECODER_MODULEINFO::TAG_TITLE) return true;
+    // 1ファイル複数曲の拡張子は、曲数を知る手段が Open の戻り値しかないため
+    // dwSupportTagInfo に関わらずタグ取得用に開く(kpi_decoder.h 2026/11/25版)
+    return isMultiSongExtension(extLower);
 }
 
 std::wstring PluginInfo::displayName() const
@@ -135,6 +138,9 @@ struct PluginRegistry::Impl {
           modules(opt.maxResidentModules > 0 ? (size_t)opt.maxResidentModules : 0)
     {
         ctx.options = opt;
+        if (opt.onPluginMessage) {
+            ctx.messageHandler = std::make_shared<const PluginMessageHandler>(opt.onPluginMessage);
+        }
         ctx.root.attach(new HostRoot(&ctx));
         // DLL 検索ディレクトリの登録。プロセスグローバルな状態のため所有権はアプリ側:
         // cookie 指定済み(アプリが登録済み)の項目には触らず、未登録(nullptr)の項目
@@ -262,8 +268,8 @@ std::optional<FileTags> PluginRegistry::scanTags(const std::wstring& file, uint3
     };
     std::wstring ext = extensionOf(file);
     for (const PluginInfo& cand : impl_->candidatesFor(ext)) {
-        // タグ専用オープン(Open(cpRequest=NULL))は TAG_TITLE 対応プラグインにのみ許される
-        if (!cand.canTagOnlyOpen()) {
+        // タグ専用オープン(Open(cpRequest=NULL))は TAG_TITLE 対応か複数曲拡張子のみ
+        if (!cand.canTagOnlyOpen(ext)) {
             record(cand, false, L"タグ取得非対応(タグ専用オープン不可)");
             continue;
         }
@@ -305,8 +311,6 @@ std::optional<FileTags> PluginRegistry::scanTags(const std::wstring& file, uint3
             record(cand, false, std::move(reason));
             continue; // 次の候補プラグインへフォールバック
         }
-        record(cand, true, L"");
-
         FileTags out;
         out.pluginPath = cand.path;
         out.pluginDisplay = cand.displayName();
@@ -314,20 +318,25 @@ std::optional<FileTags> PluginRegistry::scanTags(const std::wstring& file, uint3
 
         if (count > 1) {
             // 複数曲: dwNumber=0 でファイル全体(アルバム相当)の情報を取得。
-            // Select は切り替え後の曲番号を返すため dwNumber=0 では 0 が正常値
-            // (0 以外を返すと KbMedia Player 本体の処理が先に進まない)。
-            // 戻り値で成否を判定出来ないので、通知されたタグは常に取り込む
+            // Select の成否は「戻り値 == dwNumber」で判定する(kpi_decoder.h 2026/11 明記)。
+            // dwNumber=0 の失敗は 0xFFFFFFFF 等の 0 以外で、その場合 KbMedia Player 本体は
+            // ファイルを開けないものとして扱う。ここでも開けなかった扱いにして次の候補へ。
+            // (古いプラグインは失敗にも 0 を返すことがあるが、成功(タグなし)として扱う)
             ComPtr<TagSink> sink;
             sink.attach(new TagSink);
-            dec->Select(0, nullptr, sink.get(), tagFields);
+            if (dec->Select(0, nullptr, sink.get(), tagFields) != 0) {
+                record(cand, false, L"ファイル全体の Select(0) が失敗");
+                continue;
+            }
             sink->harvest(&out.album);
         }
+        record(cand, true, L"");
         out.tracks.resize(count);
         for (DWORD i = 1; i <= count; ++i) {
             ComPtr<TagSink> sink;
             sink.attach(new TagSink);
-            // ppMediaInfo=NULL: タグ情報のみ要求(仕様)
-            if (dec->Select(i, nullptr, sink.get(), tagFields)) {
+            // ppMediaInfo=NULL: タグ情報のみ要求(仕様)。成功は戻り値 == 曲番号
+            if (dec->Select(i, nullptr, sink.get(), tagFields) == i) {
                 sink->harvest(&out.tracks[i - 1]);
             }
         }

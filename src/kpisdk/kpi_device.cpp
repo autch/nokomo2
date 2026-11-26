@@ -17,6 +17,9 @@ HRESULT WINAPI kpi_CreateOutDeviceModule(pfn_kpiCreateInstance fnCreateInstance,
                                          IKpiOutDeviceModule **ppModule,
                                          IKpiUnknown *pUnknown)
 {
+    //先に NULL にしておく。プラグインが失敗時に *ppvObject を書き換えなくても、
+    // 呼び出し側の初期値が残らないようにする
+    *ppModule = NULL;
     return fnCreateInstance(IID_IKpiOutDeviceModule, (void**)ppModule, pUnknown);
 }
 ///////////////////////////////////////////////////////////////////////////////

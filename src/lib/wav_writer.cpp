@@ -1,5 +1,7 @@
 #include "wav_writer.hpp"
 
+#include "nokomo/nokomo.hpp"
+
 #include <cstring>
 #include <vector>
 
@@ -41,7 +43,7 @@ constexpr uint64_t kSizeLimit32 = 0xFFFFFFFEull; // 32bit サイズフィール�
 } // namespace
 
 bool WavWriter::open(const std::wstring& path, uint32_t sampleRate, uint32_t channels,
-                     int32_t bitsPerSample, bool forceRf64)
+                     int32_t bitsPerSample, uint32_t channelMask, bool forceRf64)
 {
     close();
     isFloat_ = bitsPerSample < 0;
@@ -49,7 +51,10 @@ bool WavWriter::open(const std::wstring& path, uint32_t sampleRate, uint32_t cha
     wroteRf64_ = false;
     uint32_t bits = (uint32_t)(isFloat_ ? -bitsPerSample : bitsPerSample);
     bytesPerFrame_ = bits / 8 * channels;
-    if (bytesPerFrame_ == 0 || sampleRate == 0) return false;
+    if (bytesPerFrame_ == 0 || sampleRate == 0 || channels > 0xFFFF) return false;
+    const uint32_t stdMask = nokomo::defaultChannelMask(channels);
+    if (channelMask == 0) channelMask = stdMask;
+    const bool extensible = channels > 2 || channelMask != stdMask;
 
     h_ = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
                      FILE_ATTRIBUTE_NORMAL, nullptr);
@@ -65,7 +70,10 @@ bool WavWriter::open(const std::wstring& path, uint32_t sampleRate, uint32_t cha
     put32(hdr, kDs64BodySize);
     for (uint32_t i = 0; i < kDs64BodySize; ++i) hdr.push_back(0);
     putTag(hdr, "fmt ");
-    if (isFloat_) {
+    if (extensible) {
+        put32(hdr, 40);
+        put16(hdr, 0xFFFE); // WAVE_FORMAT_EXTENSIBLE
+    } else if (isFloat_) {
         put32(hdr, 18);
         put16(hdr, 3); // WAVE_FORMAT_IEEE_FLOAT
     } else {
@@ -77,8 +85,20 @@ bool WavWriter::open(const std::wstring& path, uint32_t sampleRate, uint32_t cha
     put32(hdr, sampleRate * bytesPerFrame_);
     put16(hdr, (uint16_t)bytesPerFrame_);
     put16(hdr, (uint16_t)bits);
-    if (isFloat_) {
+    if (extensible) {
+        put16(hdr, 22);                // cbSize
+        put16(hdr, (uint16_t)bits);    // wValidBitsPerSample
+        put32(hdr, channelMask);       // dwChannelMask
+        // SubFormat: KSDATAFORMAT_SUBTYPE_PCM / _IEEE_FLOAT
+        // {0000000X-0000-0010-8000-00AA00389B71}
+        static const uint8_t kGuidTail[12] = {0x00, 0x00, 0x10, 0x00, 0x80, 0x00,
+                                              0x00, 0xAA, 0x00, 0x38, 0x9B, 0x71};
+        put32(hdr, isFloat_ ? 3 : 1);
+        hdr.insert(hdr.end(), kGuidTail, kGuidTail + 12);
+    } else if (isFloat_) {
         put16(hdr, 0); // cbSize
+    }
+    if (isFloat_) {
         putTag(hdr, "fact");
         put32(hdr, 4);
         factOffset_ = (uint32_t)hdr.size();

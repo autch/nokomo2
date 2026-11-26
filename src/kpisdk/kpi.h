@@ -5,8 +5,12 @@
 #pragma pack(push, 1) //構造体のアラインメント
 /*
 
-  KbMedia Player プラグイン SDK (2026/10/31版)(本体Ver 3.17beta3 用)
-  (v3.17beta2 以前の本体でも実用上はほとんど問題なし)
+  KbMedia Player プラグイン SDK (2026/11/18版)(本体Ver 3.17beta6 用)
+  (マルチチャンネル対応を除けば v3.17beta5 以前の本体でも実用上はほとんど問題なし)
+
+  AI(Claude 等)がプラグインを作成・修正する場合は、ヘッダと合わせて
+  kpisdk_for_ai.md を必ず読むこと。ヘッダに書いていない前提や本体の動きの
+  細部をまとめてある。
 
   ・kmp_pi.h: 旧仕様のプラグインを作成・使用時に必要
               IKpiTagInfo の定義済み cszName を使いたい場合も必要
@@ -17,6 +21,10 @@
   ・kpi_decoder.h: デコーダプラグイン作成・使用時に必要
                    演奏プラグイン作成・使用時にも必要
   ・kpi_player.h:  演奏プラグイン作成・使用時に必要
+  ・kpi_video_window.h: デコーダプラグインで映像・ウィンドウを出す場合や、本体の再生位置が
+                   必要な場合に必要(対応は任意)
+  ・kpi_message.h: 利用者へのお知らせ(本体のメッセージログ)を使う場合に必要(対応は任意)
+  ・kpi_workfolder.h: プラグイン用の作業フォルダを本体から借りる場合に必要(対応は任意)
   ・kpi_unarc.h;   アーカイブプラグイン作成・使用時に必要
   ・kpi_device.h:  デバイスプラグイン作成・使用時に必要
   ・kpi_converter.h: 変換プラグイン作成・使用時に必要(v3.16 以降)
@@ -31,6 +39,12 @@
     ・kpi_unarc.cpp:   アーカイブプラグイン関係のヘルパー関数使用時
     ・kpi_device.cpp:  デバイスプラグイン関係のヘルパー関数使用時
     ・kpi_converter.cpp: 変換プラグイン関係のヘルパー関数使用時
+  ・kpisdk_for_ai.md: AI 向けの補足(ヘッダに書いていない前提・本体の動きの
+                      細部・注意点)の入口。人が読む必要はない(読んでも構わない)
+                      作るプラグインの種類ごとに読むヘッダと補足の表がある。
+                      補足の本文は kpisdk_for_ai_common.md(全種類に共通)・
+                      kpisdk_for_ai_decoder.md・kpisdk_for_ai_player.md・kpisdk_for_ai_device.md・
+                      kpisdk_for_ai_unarc.md・kpisdk_for_ai_converter.md に分けてある(2026/11/24)
 
   とりあえず新しい仕様のプラグインを作ってみる場合は、
 
@@ -46,6 +60,106 @@
 
   更新履歴
 
+  2026/11/25:(v3.17beta7)
+    ・演奏プラグインの仕様を変更(KPI_PLAYER_MODULE_VERSION を 3 から 4 に変更。kpi_player.h)
+      (本体は KPI_PLAYER_MODULE_VERSION が一致しない演奏プラグインを読み込まない。
+       v3.17beta6 以前の本体では 4 の演奏プラグインを、v3.17beta7 以降の本体では 3 の演奏プラグインを使えない)
+      ・IKpiPlayer::GetCaps を追加(Select で選んだ曲が音量・速度・音程の変更に対応するかを
+        KPI_PLAYER_CAPS_VOLUME/TEMPO/PITCH で返す。音量に対応しない曲は、本体はフェードアウトせずに止める)
+      ・IKpiPlayer::SetPitch を追加(音程をセント単位で指定する。今の本体は -1200〜1200)
+      ・IKpiPlayer::CreateVideoWindow と KPI_PLAYER_CAPS_VIDEO_PARENT を追加
+        (BOOL CreateVideoWindow(HWND hParent, HWND *phChild)。hParent が NULL なら自分のウィンドウを使う)
+        (本体が作った親ウィンドウの中に映像を描けるようにした。位置・大きさ・全画面・常に手前に表示・
+         右クリックのメニュー等は本体が行う。自分のウィンドウを使うか、親ウィンドウの中に描くかはプラグインが選ぶ)
+      ・IKpiPlayer::GetStatus の戻り値に KPI_STATUS_ERROR((DWORD)-1)を追加
+        (エラーで止まったとき。本体は次の曲へ進み、単曲リピートでも同じ曲を開き直さない)
+      ・各メソッドの引数・戻り値の意味と、今の本体の呼び方を明記
+        (Play はシークの代わりにも使う、SetRepeat は対応しなくて良い、各メソッドは有限の時間で戻る、
+         タグ取得用の Open(cpRequest が NULL)は軽く済ませる、など)
+      ・演奏プラグインの位置づけを「デコーダプラグインに出来ない形式のためのもの」に改めた
+    ・プラグイン用の作業フォルダの口 IKpiWorkFolder を追加(kpi_workfolder.h。対応は任意。全種類のプラグインで使用可)
+      (プラグインが自分で作るファイルの置き場所を本体から借りる。解放すると本体がフォルダごと削除する。
+       kpi_CreateWorkFolder で取得。v3.17beta6 以前の本体では取得に失敗する)
+    ・アーカイブプラグインの仕様を変更(KPI_UNARC_MODULE_VERSION を 2 から 3 に変更。kpi_unarc.h)
+      ・IKpiUnArcModule::Open の作業用フォルダ(cszOutputPath)を廃止。実ファイルとして展開する場合は
+        IKpiWorkFolder で作業フォルダを借りる
+      ・IID_IKpiUnArc と IID_IKpiUnArcModule を変更(v3.17beta6 以前の本体では 3 のアーカイブプラグインを、
+        v3.17beta7 以降の本体では 2 のアーカイブプラグインを使えない)
+    ・変換プラグインの仕様を変更(KPI_CONVERTER_MODULE_VERSION を 0 から 1 に変更。kpi_converter.h)
+      ・IKpiConverterModule::Open の作業用フォルダ(cszOutputPath)を廃止。実ファイルが必要な場合は
+        IKpiWorkFolder で作業フォルダを借りる
+      ・IID_IKpiConverter と IID_IKpiConverterModule を変更(v3.17beta6 以前の本体では 1 の変換プラグインを、
+        v3.17beta7 以降の本体では 0 の変換プラグインを使えない)
+      ・本体は変換結果の IKpiFile を Release してから IKpiConverter を Release することを明記
+      ・cszToExts の「今のところ .mid のみ対応」を削除(消し忘れ。.mid 以外はその拡張子のデコーダで開く)
+      ・本体の呼び方(タグ取得・再生・変換できなかったとき・UpdateConfig の呼ばれる時期)と、
+        変換は 1 段だけ・変換元は 1 ファイル複数曲として扱わないことを明記
+    ・アーカイブプラグインの格納ファイル名の列挙の注意を改めた(kpi_unarc.h)
+      (使用出来ない文字や .. などを含む名前の扱いはプラグインを使う側が決めることとし、
+       プラグインは飛ばしても、そのまま列挙しても良いとした。
+       プラグインが自分で実ファイルを書き出す場合は、プラグイン側で名前を確かめることを明記)
+    ・アーカイブプラグインの Extract の qwSize、cszSolidExts・dwSolid を本体が何に使うかを明記(kpi_unarc.h)
+      (qwSize に応じる義務はない。今の本体が格納ファイルより小さい値を渡すのはドキュメントの表示だけ)
+    ・1ファイル複数曲の拡張子(cszMultiSongExts)のファイルは、dwSupportTagInfo の値に関わらずタグ取得用に
+      開かれることを明記(kpi_decoder.h・kpi_player.h。曲の数を得るため。本体の動作は以前と同じ)
+    ・タグ取得用の Open(cpRequest が NULL)は、再生できるファイルならタグを取得できなくても成功を返すことを明記
+      (kpi_decoder.h・kpi_player.h。TAG_TITLE がなくても、cpRequest が NULL というだけで 0 を返してはいけない)
+    ・デコーダプラグインの映像・ウィンドウ・再生位置の口 IKpiVideoWindow を追加(kpi_video_window.h。対応は任意)
+      (本体の親ウィンドウの中に映像を描く・自分のウィンドウを本体の指示に従わせる・本体の再生位置を知る)
+    ・kpi_impl.h: KbKpiUnknownImpl2(2 つのインターフェースを 1 つのクラスで実装するとき用)を追加
+    ・デバイスプラグインの IKpiOutDeviceModule::ApplyConfig の nValue を UINT64 から INT64 に変更(kpi_device.h)
+      (ほかの種類のプラグインと同じにした。大きさは同じなので、作り直したプラグインも古い本体で動く。
+       UINT64 で宣言したプラグインは、作り直すときに INT64 に直さないとビルドできない)
+    ・デコーダプラグインの Seek の dwFlag を、仕様どおりに場面で変えて渡すようにした(kpi_decoder.h。以前は常に
+      SEEK_FLAGS_SAMPLE。CueSheet・ループ・位置 0 は SAMPLE、利用者のシークは歌詞・WRD・映像があれば ACCURATE、なければ ROUGH)
+    ・出力プラグインの EnumDevices と、設定画面の「最適な設定を調べる」の Open を、MTA のスレッドから呼ぶようにした
+      (kpi_device.h。以前はメインスレッド(STA)から呼んでいた。再生のときの Open は以前から MTA の演奏スレッド)
+    ・kpi_CreateDecoder で、呼び出しの入れ子の途中にいるプラグインが選ばれた場合は失敗するようにした
+      (A が B を使い、B がまた A を使う循環を止める。以前は呼んだプラグイン自身の場合だけ失敗した)
+    ・AI 向けの補足(kpisdk_for_ai.md)を、作るプラグインの種類ごとのファイルに分けた(節の番号は変えていない。
+      kpisdk_for_ai.md は入口で、種類ごとに読むヘッダと補足の表がある)
+    ・IKpiFile::Abort を今の本体は呼ばないこと(対応しない場合は FALSE を返せば良い)を明記。kpi.h・kpi_impl.h の誤字を直した
+    ・デコーダプラグインのタグ取得用の dwTagGetFlags の記述を、今の本体の値(TITLE|ARTIST|COPYRIGHT)に直した
+      (kpi_decoder.h。COPYRIGHT は MIDI などアーティストの情報がない形式のため。本体の動作は以前と同じ)。
+      kpi_decoder.h・kpi_converter.h の誤字を直した
+    ・デコーダプラグインの TAG_DECODER_EXCLUSIVE が未実装であること(本体はフラグを見ない)、TAG_EXTRA は
+      今の本体は設定画面の表示にだけ使うこと、IKpiDecoder::UpdateConfig は次の Render・Seek の直前に
+      同じスレッドから呼ばれることを明記(kpi_decoder.h。本体の動作は以前と同じ)
+    ・演奏プラグインで GetCaps に KPI_PLAYER_CAPS_VOLUME/TEMPO/PITCH がない曲には、本体は
+      SetVolume/SetTempo/SetPitch を呼ばないようにした(kpi_player.h。Select の前にも呼ばない。
+      以前はフラグに関わらず呼んでいた。ほかのアプリからは呼ばれることがあるので、対応しない場合も
+      呼ばれたら何もしないこと)
+    ・デバイスプラグインの SUPPORT_FLAG_VOLUME・SUPPORT_FLAG_RATE を立てていないデバイスには、本体は
+      SetVolume・SetRate を呼ばないようにした(kpi_device.h。以前はフラグに関わらず呼んでいた。
+      ほかのアプリや古い本体からは呼ばれることがあるので、対応しない場合も FALSE を返すこと)
+    ・デバイスプラグインの本体の呼び方を明記(kpi_device.h。SetVolume・SetRate を呼ぶ条件と戻り値の扱い、
+      UpdateConfig の呼ばれる時期、曲の境目で開き直さないことがある、nSizeSample が 0 のこともある、
+      dwSupportFlags のうち本体が見ているもの)
+    ・全てのプラグインで共通の「スレッドと COM について」を追加(kpi.h。決まりは以前と同じで、明記しただけ)
+  2026/11/18:(v3.17beta6)
+    ・マルチチャンネル(3ch 以上、7.1ch まで)に対応
+      ・KPI_MEDIAINFO::dwChannels を 1〜8 に変更
+        (3ch 以上に対応していない v3.17beta5 以前の本体は、3ch 以上の曲の再生に失敗する)
+      ・KPI_MEDIAINFO::dwSpeakerConfig の仕様を追加(WAVEFORMATEXTENSIBLE::dwChannelMask と同じ値。
+        0 はチャネル数で決まる標準の配置。データはビットの小さい順に並べる)
+      ・KPI_DEVICE_MODULEINFO::SUPPORT_FLAG_MULTICHANNEL を追加
+        (このフラグを立てたデバイスにだけ、本体は 3ch 以上で Open を呼ぶ。
+         立てていないデバイスには、本体がステレオにまとめて 2ch で渡す)
+      ・KPI_DEVICE_FORMAT::dwSpeakerConfig の仕様を追加(KPI_MEDIAINFO::dwSpeakerConfig と同じ)
+    ・IKpiOutDevice::Output に float・double で渡す値に NaN・±∞ を含まないことを本体が保証するようにした
+      (デバイスプラグインは NaN・±∞ を確かめなくてよい。kpi_device.h)
+      ・値の範囲は今までどおり -1.0〜1.0 に収めない(1.0 を超えることがある。収めるべきかはデバイスによって
+        変わるため。自分で整数に直すデバイスプラグインは範囲を確かめること)
+  2026/11/13:(v3.17beta5)
+    ・IKpiFolder::OpenFile/OpenFolder で UNC パスが渡されたとき、本体は LAN 外のデータを
+      無視してオープンに失敗するようにした。(将来の版では設定可能にするかもしれない)
+    ・IKpiConfig::SetBin で保存出来るデータサイズの上限(1MB)を追加
+    ・IKpiConfig::SetStr で保存出来る文字列のサイズの上限(16KB)を追加
+    ・IKpiDecoder::Select/IKpiPlayer::Select に、Open が返した曲数より大きい曲番号が
+      渡されないことを明記(本体が保証する。プラグインは曲番号の範囲を確かめなくて良い)
+      v3.17beta4 以前の本体はタグ取得時に曲数より大きい曲番号を渡すことがあるため、
+      それらの本体でも使う場合は、プラグイン側で範囲を確かめないと落ちることがある
+    ・AI 向けの補足 kpisdk_for_ai.md を追加
   2026/10/31:(v3.17beta3)
     ・文字コードを UTF-8(BOM付) に変更
     ・IKpiConfig のセクション名とキー名の名前付け規則を追加
@@ -77,6 +191,7 @@
     ・kpi_CreateLocalFile/kpi_CreateMemoryFile を追加
     ・IKpiUnArcModule::Open の cszOutputPath 以下に展開結果を実ファイル出力した場合、
       アーカイブプラグインを使用する側(通常は KbMedia Player)が必要に応じて削除するようにした
+      (cszOutputPath は v3.17beta7 で廃止。IKpiWorkFolder に置き換えた)
   2017/01/16:
     ・特になし(正式版リリースに合わせて追記しただけ)
   2017/01/09:
@@ -206,7 +321,7 @@
     IKpiDecoder       : ↑を実際に処理する
     IKpiUnArcModule   : アーカイブ展開プラグイン
     IKpiUnArc         : ↑を実際に処理する
-    IKpiPlayerModule  : 演奏プラグイン(主に動画等)(PCM を取得出来ないが動画も扱える)
+    IKpiPlayerModule  : 演奏プラグイン(PCM を取得出来ず、デコーダプラグインに出来ない形式用。動画も扱える)
     IKpiPlayer        ; ↑を実際に処理する
     IKpiOutDeviceModule :デバイス出力プラグイン
     IkpiOutDevice       :↑を実際に処理する
@@ -214,6 +329,20 @@
     これらのインターフェースはプラグイン側で実装が必要。
     QueryInterface/AddRef/Release の実装が面倒なら kpi_impl.h で
     定義されているクラスから派生させても良い(必須ではない)
+
+    スレッドと COM について(2026/11 追加。全てのプラグインで共通)
+    ・本体がプラグインのメソッドを呼ぶスレッドの COM の初期化の状態は決まっていない。
+      本体の中では STA のスレッド(メインスレッド)からも、MTA のスレッド(再生等)からも
+      呼ばれる。kbrunkpi.exe 経由のときは MTA で初期化済みのスレッドから呼ばれる。
+      本体以外のアプリから使われる場合は、初期化されていないこともある。
+    ・COM を使う場合は、プラグインが自分で作ったスレッドの中で、初期化と解放を対にして使うこと。
+    ・呼ばれたスレッドで CoInitializeEx した場合は、成功したとき(S_OK/S_FALSE)だけ
+      CoUninitialize すること。RPC_E_CHANGED_MODE のときは今の種類のまま使い、
+      CoUninitialize は呼ばないこと(呼ぶと本体側の初期化を取り消してしまう)。
+    ・呼ばれたスレッドで作った COM のオブジェクトを、別のメソッドで使わないこと
+      (各メソッドは同じスレッドから呼ばれるとは限らない。例えば Open で作って Render で使う等)。
+    ・STA が前提の処理(シェルのダイアログ等)は、STA のスレッドを自分で作って行うこと。
+    ・詳しくは kpisdk_for_ai_common.md の 3-3。
 
     構造体(struct KPI_XXX)
 
@@ -508,7 +637,7 @@ public:
       GetBuffer を積極的に利用する。ただし GetBuffer はサイズが大きすぎると失敗
       することがあることに留意すること。
 
-      もし GetBufferSize に失敗した場合は Read と GetSize を使ってプラグインが
+      もし GetBuffer に失敗した場合は Read と GetSize を使ってプラグインが
       自分でメモリを割り当てるか、プラグインが扱う形式としてはサイズが大きすぎる
       と判断して適切に処理すること。
 
@@ -522,6 +651,9 @@ public:
       Abort() は通常、プラグインを使用するアプリケーション(KbMedia Player)に
       よって呼び出される。
       プラグイン側でこのメソッドを呼び出してはいけない。
+      (2026/11/25 明記)今の本体は Abort を呼ばない(呼ぶと落ちるプラグインが多かったため)。
+      プラグインが提供する IKpiFile(アーカイブプラグインの展開結果など)は、Abort に対応しなくて良い
+      (対応しない場合は FALSE を返す)。
 */
 };
 ///////////////////////////////////////////////////////////////////////////////
@@ -643,6 +775,7 @@ public:
       例5 ：OpenFile("a.lzh>b/c.txt", &pFile);//アーカイブ(相対パス)        #現在未実装
       例6 ：OpenFile("C:\\a.lzh>b.zip>c.txt", &pFile);//アーカイブ(絶対パス)#現在未実装
       例7 ：OpenFile("http://www.hoge.com/a.zip>b.txt", &pFile);//http://     #現在未実装
+      例8 ：OpenFile("//server/share/a.mp3", &pFile);//UNC パス
 
       例5,6 はパフォーマンスの関係上実装される見込みは少ない。
       どうしてもアーカイブの中のファイルを取得したければ、
@@ -650,7 +783,7 @@ public:
       例5 : OpenFolder("a.lzh>", &pFolder);
             pFolder->OpenFile("b/c.txt", &pFile);
             または
-            OpenFolder("a.lzh>b/", &pFolder;
+            OpenFolder("a.lzh>b/", &pFolder);
             pFolder->OpenFile("c.txt", &pFile);
       例6 : OpenFolder("C:\\a.lzh>b.zip>", &pFolder);
             pFolder->OpenFile("c.txt", &pFile);
@@ -663,6 +796,11 @@ public:
       ただし、例3 のように親フォルダのファイルを開いた場合は復元されないことがある。
       また、アーカイブプラグインの動作の仕様上、親フォルダを指定してなくてもうまく
       復元されないことがある。
+
+      例8: の UNC パスは現在の本体の実装では LAN 外のデータのオープンには失敗する(OpenFolder も同様)
+      プラグインを使うホストを実装する際にどうするかは実装者の判断に委ねる
+      プラグインを実装する際に UNC パスを扱う場合はホストの方針に従うなら OpenFile/OpenFolder
+      で開くのも一つの方法(プラグインの設定から参照ファイルを取得してそれを開く場合など)
 
     BOOL WINAPI OpenFolder(const wchar_t* cszName, IKpiFolder **ppFolder);
       EnumFiles で返す名前に対応するフォルダを取得する。
@@ -682,6 +820,8 @@ public:
       例6 ：OpenFolder("a.lzh>b/", &pFolder);       //アーカイブ内フォルダ(相対パス)
       例7 ：OpenFolder("C:/a.lzh>b.zip>", &pFolder);//アーカイブ内アーカイブ(絶対パス)
       例8 ：OpenFolder("http://www.hoge.com/", &pFolder);//http    #現在未実装
+      例9 ：OpenFolder("//server/share/", &pFolder);//UNC パス
+
 */
 };
 ///////////////////////////////////////////////////////////////////////////////
@@ -766,16 +906,16 @@ public:
     virtual void WINAPI aSetValueU8(const char   *cszNameA,   int nNameSize,    //Name: Ansi
                                     const char   *cszValueU8, int nValueSize)=0;//Value: Utf8
     //Name=utf16 版
-    virtual void WINAPI wSetValueA(const wchar_t  *cszNameW,   int nNameSize,    //Name: utf15
+    virtual void WINAPI wSetValueA(const wchar_t  *cszNameW,   int nNameSize,    //Name: utf16
                                    const char     *cszValueA,  int nValueSize)=0;//Value; Ansi
     virtual void WINAPI wSetValueW(const wchar_t  *cszNameW,   int nNameSize,    //Name: Utf16
                                    const wchar_t  *cszValueW,  int nValueSize)=0;//Value: Utf16
-    virtual void WINAPI wSetValueU8(const wchar_t *cszNameW,   int nNameSize,    //Name; utf16
+    virtual void WINAPI wSetValueU8(const wchar_t *cszNameW,   int nNameSize,    //Name: utf16
                                     const char    *cszValueU8, int nValueSize)=0;//Utf8: utf8
     //Name=utf8 版
     virtual void WINAPI u8SetValueA(const char    *cszNameU8,  int nNameSize,    //Name: utf8
                                     const char    *cszValueA,  int nValueSize)=0;//Value: Ansi
-    virtual void WINAPI u8SetValueW(const char    *cszNameU8,  int nNameSize,    //Name; utf8
+    virtual void WINAPI u8SetValueW(const char    *cszNameU8,  int nNameSize,    //Name: utf8
                                     const wchar_t *cszValueW,  int nValueSize)=0;//Value: Utf16
     virtual void WINAPI u8SetValueU8(const char   *cszNameU8,  int nNameSize,    //Name: utf8
                                      const char   *cszValueU8, int nValueSize)=0;//Value: Utf8
@@ -1006,7 +1146,7 @@ public:
 ///////////////////////////////////////////////////////////////////////////////
 //設定関係
 ///////////////////////////////////////////////////////////////////////////////
-enum{//KPK_CFG_INFO::dwType(設定項目の型)
+enum{//KPI_CFG_KEY::dwType(設定項目の型)
     KPI_CFG_TYPE_BOOL,   //bool(表示は false/true, データは 0/1)
     KPI_CFG_TYPE_INT,    //INT64
     KPI_CFG_TYPE_FLOAT,  //double
@@ -1291,6 +1431,10 @@ public:
       してゼロクリアされたデータが返るが、偶然デコードに成功してしまうことも
       理論的にはあり得る。
 
+    SetStr:
+      cszValue のサイズの上限は 16KB(16*1024 バイト。終端の 0 を含む)。
+      文字数では 8191 文字まで。上限を超える場合は何もしない。(保存されない)
+
     GetStr:
       dwSize は pszValue のバッファサイズ(文字数単位ではない)
       文字列の格納に必要なバッファのサイズを返す。
@@ -1300,6 +1444,7 @@ public:
 
     SetBin:
       dwSize は格納すべきバイナリデータ(pBuffer)のバッファサイズ
+      dwSize の上限は 1MB(1024*1024 バイト)。上限を超える場合は何もしない。(保存されない)
       格納すべきバイナリデータの設定画面はプラグイン側で作成する必要がある。
 
     GetBin:
@@ -1479,8 +1624,13 @@ public:
       渡しても良いし、OpenFile/OpenFolder して得たものを渡しても良い。
       プラグインが独自に実装した pFile/pFolder を渡しても良い。
 
-      現在未実装
+      kbrunkpi.exe 経由のときは未実装
       kbrunkpi.exe 経由での実装が複雑すぎて無理かも…
+
+      使うプラグインは pFile の GetFileName の拡張子で本体が選ぶ。呼んだプラグイン自身や、
+      その呼び出しの入れ子の途中にいるプラグイン(A が B を使い、B がまた A を使う場合の A)が選ばれた場合は
+      失敗する(循環を止めるため。v3.17beta7 以降。それより前の本体は、自分自身の場合だけ失敗する)。
+      (2026/11/25 追記)
 */
 };
 //IKpiUnkProvider のヘルパー関数(使用する場合は kpi.cpp もプロジェクトに追加すること)
@@ -1501,7 +1651,7 @@ typedef HRESULT (WINAPI *pfn_kpiCreateInstance)(REFIID riid,      //IKpiXXXModul
 /*
     riid: IID_IKpiDecoderModule (デコーダプラグイン)
           IID_IKpiUnArcModule   (アーカイブプラグイン)
-          IID_IKpiPlayerMoodule (演奏プラグイン)
+          IID_IKpiPlayerModule  (演奏プラグイン)
           IID_IKpiOutDeviceModule (デバイスプラグイン)
         のいずれかが渡される。
     デコーダプラグインは riid に IID_IKpiDecoderModule を渡されたら
@@ -1537,7 +1687,7 @@ typedef HRESULT (WINAPI *pfn_kpiCreateInstance)(REFIID riid,      //IKpiXXXModul
     *ppvObject にインスタンスを渡す場合は、適切な型にキャストすること。
     例えば、
 
-    if(IsEqualIID(riid, IID_IKpiDecoderModule){
+    if(IsEqualIID(riid, IID_IKpiDecoderModule)){
         CKpiXXXDecoderModule *pModule = new CKpiXXXDecoderModule;
         // *ppvObject = pModule; //NG
         *ppvObject = (IKpiDecoderModule*)pModule; //OK

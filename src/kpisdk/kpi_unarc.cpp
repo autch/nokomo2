@@ -18,7 +18,10 @@ DWORD WINAPI kpi_CreateLocalFile(IKpiUnknown *pUnknown, //kpi_CreateInstance の
 {
     DWORD ret = 0;
     IKpiUnkProvider *pProvider = NULL;
-    pUnknown->QueryInterface(IID_IKpiUnkProvider, (void**)&pProvider);
+    //pUnknown が NULL でも落ちないようにする(IKpiUnkProvider を得られない場合と同じ扱い)
+    if(pUnknown){
+        pUnknown->QueryInterface(IID_IKpiUnkProvider, (void**)&pProvider);
+    }
     if(pProvider){
         ret = kpi_CreateLocalFile(pProvider, cszFileNameFullPath, ppFile);
         pProvider->Release();
@@ -48,7 +51,10 @@ DWORD WINAPI kpi_CreateMemoryFile(IKpiUnknown *pUnknown,//kpi_CreateInstance の
     DWORD ret = 0;
     IKpiUnkProvider *pProvider = NULL;
     *ppFile = NULL;
-    pUnknown->QueryInterface(IID_IKpiUnkProvider, (void**)&pProvider);
+    //pUnknown が NULL でも落ちないようにする(IKpiUnkProvider を得られない場合と同じ扱い)
+    if(pUnknown){
+        pUnknown->QueryInterface(IID_IKpiUnkProvider, (void**)&pProvider);
+    }
     if(pProvider){
         ret = kpi_CreateMemoryFile(pProvider, pBuffer, stSize, cszFileName, ppFile);
         pProvider->Release();
@@ -63,6 +69,9 @@ HRESULT WINAPI kpi_CreateUnArcModule(pfn_kpiCreateInstance fnCreateInstance,
                                      IKpiUnArcModule **ppModule,
                                      IKpiUnknown *pUnknown)
 {
+    //先に NULL にしておく。プラグインが失敗時に *ppvObject を書き換えなくても、
+    // 呼び出し側の初期値が残らないようにする
+    *ppModule = NULL;
     return fnCreateInstance(IID_IKpiUnArcModule, (void**)ppModule, pUnknown);
 }
 ///////////////////////////////////////////////////////////////////////////////

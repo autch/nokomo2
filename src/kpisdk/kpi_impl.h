@@ -10,22 +10,34 @@
 //
 //ここにないもので IKpiUnknown の派生クラスを実装する場合は
 //
-//class CKpiUnArc : public KbKpiUnknwonImpl<IKpiUnArc>
+//class CKpiUnArc : public KbKpiUnknownImpl<IKpiUnArc>
 //{
 //};
 //または
-//typedef KbKpiUnknwonImpl<IKpiUnArc> CKpiUnArc;
+//typedef KbKpiUnknownImpl<IKpiUnArc> CKpiUnArc;
 //
-//class CKpiPlayer : public KbKpiUnknwonImpl<IKpiPlayer>
+//class CKpiPlayer : public KbKpiUnknownImpl<IKpiPlayer>
 //{
 //};
 //または
-//typedef KbKpiUnknwonImpl<IKpiPlayer> CKpiPlayer;
+//typedef KbKpiUnknownImpl<IKpiPlayer> CKpiPlayer;
 //
 //のようにすれば QueryInterface と AddRef/Release だけは自動的に実装される
 //
 //KbKpiFileImpl 以外は typedef しているだけなので、他のメソッドは全て実装
 //する必要がある。
+//
+//2 つのインターフェースを 1 つのクラスで実装する場合(デコーダが IKpiVideoWindow(kpi_video_window.h)
+//にも対応する場合など)は、KbKpiUnknownImpl2 を使う。(2026/11 追加)
+//
+//class CKpiDecoder : public KbKpiUnknownImpl2<IKpiDecoder, IKpiVideoWindow>
+//{
+//};
+//
+//QueryInterface は IKpiDecoder・IKpiVideoWindow・IKpiUnknown のどれにも答え、
+//参照カウントは 1 つ(どちらのインターフェースから AddRef/Release しても同じ)。
+//(KbKpiUnknownImpl<IKpiDecoder> と IKpiVideoWindow から派生させただけでは、
+// IKpiVideoWindow の側の QueryInterface/AddRef/Release が実装されないままになる)
 class IKpiDecoder;      //kpi_decoder.h に移動したので前方宣言しておく
 class IKpiDecoderModule;//kpi_decoder.h に移動したので前方宣言しておく
 ///////////////////////////////////////////////////////////////////////////////
@@ -84,13 +96,59 @@ ULONG WINAPI KbKpiUnknownImpl<T>::Release(void)
     return ret;
 }
 ///////////////////////////////////////////////////////////////////////////////
+//2 つのインターフェース T1・T2 を 1 つのクラスで実装するとき用(2026/11 追加)
+//T1 が主(IKpiUnknown を求められたときは T1 の側を返す)。参照カウントは共通
+template<class T1, class T2> class KbKpiUnknownImpl2 : public T1, public T2
+{
+protected:
+    LONG m_cRef;
+    KbKpiUnknownImpl2(void):m_cRef(1){}
+    virtual ~KbKpiUnknownImpl2(void){}
+public:
+    //IUnknown 派生(T1・T2 の両方の分を兼ねる)
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void **ppvObject)
+    {
+        if (!ppvObject) {
+            return E_INVALIDARG;
+        }
+        else if(IsEqualGUID(riid, __uuidof(T1))){
+            *ppvObject = (T1*)this;
+        }
+        else if(IsEqualGUID(riid, __uuidof(T2))){
+            *ppvObject = (T2*)this;
+        }
+        else if(IsEqualGUID(riid, __uuidof(IKpiUnknown))){
+            *ppvObject = (IKpiUnknown*)(T1*)this;
+        }
+        else{
+            *ppvObject = NULL;
+            return E_NOINTERFACE;
+        }
+        AddRef();
+        return S_OK;
+    }
+    ULONG STDMETHODCALLTYPE AddRef(void)
+    {
+        return InterlockedIncrement(&m_cRef);
+    }
+    ULONG STDMETHODCALLTYPE Release(void)
+    {
+        ULONG ret = InterlockedDecrement(&m_cRef);
+        if(ret == 0){
+            delete this;
+        }
+        return ret;
+    }
+};
+///////////////////////////////////////////////////////////////////////////////
 class KbKpiFileImpl : public KbKpiUnknownImpl<IKpiFile>
 {//デコーダプラグインは使用するのみ
  //本体(またはプラグインを使用するソフト)が実装
  //アーカイブプラグインでも実装が必要
 public:
     //IKpiFile 派生
-    DWORD WINAPI GetFileName(wchar_t *pszName, DWORD dwSize){pszName[0] = 0;return 0;}
+    //dwSize が sizeof(wchar_t) 未満なら書き込まない
+    DWORD WINAPI GetFileName(wchar_t *pszName, DWORD dwSize){if(dwSize >= sizeof(wchar_t)){pszName[0] = 0;}return 0;}
     BOOL  WINAPI GetRealFileW(const wchar_t **ppszFileName){*ppszFileName=NULL;return FALSE;}
     BOOL  WINAPI GetRealFileA(const char    **ppszFileName){*ppszFileName=NULL;return FALSE;}
     BOOL  WINAPI GetBuffer(const BYTE **ppBuffer, size_t *pstSize){*ppBuffer=NULL;*pstSize=0;return FALSE;}
@@ -123,8 +181,9 @@ class KbKpiNullFolder : public KbKpiFolderImpl
  //本体(またはプラグインを使用するソフト)で必要(かも)
 public:
     //IKpiFolder 派生
-    DWORD WINAPI GetFolderName(wchar_t *pszName, DWORD dwSize){pszName[0] = 0;return 0;}
-    DWORD WINAPI EnumFiles(DWORD dwIndex, wchar_t *pszName, DWORD dwSize, DWORD dwLevel){pszName[0] = 0; return 0;}
+    //dwSize が sizeof(wchar_t) 未満なら書き込まない
+    DWORD WINAPI GetFolderName(wchar_t *pszName, DWORD dwSize){if(dwSize >= sizeof(wchar_t)){pszName[0] = 0;}return 0;}
+    DWORD WINAPI EnumFiles(DWORD dwIndex, wchar_t *pszName, DWORD dwSize, DWORD dwLevel){if(dwSize >= sizeof(wchar_t)){pszName[0] = 0;} return 0;}
     BOOL  WINAPI OpenFile(const wchar_t* cszName, IKpiFile **ppFile){*ppFile=NULL;return FALSE;}
     BOOL  WINAPI OpenFolder(const wchar_t* cszName, IKpiFolder **ppFolder){*ppFolder=NULL;return FALSE;}
 };

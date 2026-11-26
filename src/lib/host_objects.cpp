@@ -561,6 +561,8 @@ double WINAPI MemoryConfig::GetFloat(const wchar_t* sec, const wchar_t* key, dou
 
 void WINAPI MemoryConfig::SetStr(const wchar_t* sec, const wchar_t* key, const wchar_t* v)
 {
+    // 上限は 16KB(終端の 0 を含む。8191 文字)。超える場合は何もしない(kpi.h 2026/11/13版)
+    if (v && (wcslen(v) + 1) * sizeof(wchar_t) > 16 * 1024) return;
     setValue(sec, key, v ? v : L"");
 }
 
@@ -584,6 +586,8 @@ DWORD WINAPI MemoryConfig::GetStr(const wchar_t* sec, const wchar_t* key, wchar_
 void WINAPI MemoryConfig::SetBin(const wchar_t* sec, const wchar_t* key, const BYTE* p, DWORD size)
 {
     if (!p) return;
+    // 上限は 1MB。超える場合は何もしない(kpi.h 2026/11/13版)
+    if (size > 1024 * 1024) return;
     setValue(sec, key, utf8ToWide(base64Encode(p, size)));
 }
 
@@ -663,6 +667,149 @@ void MemoryConfig::save()
 }
 
 ///////////////////////////////////////////////////////////////////////////////
+// HostMessenger
+///////////////////////////////////////////////////////////////////////////////
+
+void WINAPI HostMessenger::Notify(DWORD /*dwFlags*/, const wchar_t* cszFileName,
+                                  const wchar_t* cszText)
+{
+    if (!cszText || !*cszText || !handler_ || !*handler_) return;
+    // 1 件の長さに上限を設け、改行・タブ以外の制御文字は空白にする(kpi_message.h:
+    // 本体はそのようにする。ファイルのタグ等をそのまま渡して良いことになっている)
+    constexpr size_t kMaxText = 4096;
+    constexpr size_t kMaxName = 1024;
+    auto sanitize = [](const wchar_t* src, size_t maxLen, bool allowNewline) {
+        std::wstring out;
+        for (const wchar_t* p = src; *p && out.size() < maxLen; ++p) {
+            wchar_t c = *p;
+            bool keep = allowNewline && (c == L'\r' || c == L'\n' || c == L'\t');
+            if (!keep && (c < 0x20 || c == 0x7F)) c = L' ';
+            out += c;
+        }
+        return out;
+    };
+    PluginMessage msg;
+    msg.pluginPath = pluginPath_;
+    if (cszFileName) msg.fileName = sanitize(cszFileName, kMaxName, false);
+    msg.text = sanitize(cszText, kMaxText, true);
+    try {
+        (*handler_)(msg);
+    } catch (...) {
+        // 例外をプラグイン(C++ 例外の境界を越えられない)へ伝播させない
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// HostWorkFolder / WorkFolderJanitor
+///////////////////////////////////////////////////////////////////////////////
+
+// dir(末尾セパレータなし)を中身ごと削除する。リンク(ジャンクション等)は辿らず
+// リンク自体だけを消す。dir が既に無ければ成功
+static bool removeTree(const std::wstring& dir)
+{
+    DWORD attr = GetFileAttributesW(dir.c_str());
+    if (attr == INVALID_FILE_ATTRIBUTES) return GetLastError() == ERROR_FILE_NOT_FOUND ||
+                                                GetLastError() == ERROR_PATH_NOT_FOUND;
+    if (!(attr & FILE_ATTRIBUTE_REPARSE_POINT)) {
+        WIN32_FIND_DATAW fd;
+        HANDLE hf = FindFirstFileExW((dir + L"\\*").c_str(), FindExInfoBasic, &fd,
+                                     FindExSearchNameMatch, nullptr, 0);
+        if (hf != INVALID_HANDLE_VALUE) {
+            do {
+                if (wcscmp(fd.cFileName, L".") == 0 || wcscmp(fd.cFileName, L"..") == 0) continue;
+                std::wstring child = dir + L"\\" + fd.cFileName;
+                if (fd.dwFileAttributes & FILE_ATTRIBUTE_READONLY) {
+                    SetFileAttributesW(child.c_str(),
+                                       fd.dwFileAttributes & ~FILE_ATTRIBUTE_READONLY);
+                }
+                if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+                    if (fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) {
+                        RemoveDirectoryW(child.c_str()); // リンク自体のみ
+                    } else {
+                        removeTree(child);
+                    }
+                } else {
+                    DeleteFileW(child.c_str());
+                }
+            } while (FindNextFileW(hf, &fd));
+            FindClose(hf);
+        }
+    }
+    return RemoveDirectoryW(dir.c_str()) != FALSE;
+}
+
+WorkFolderJanitor::~WorkFolderJanitor()
+{
+    // 全モジュール解放後。使用中で消せなかった作業フォルダをもう一度消す
+    for (const auto& dir : pending_) removeTree(dir);
+}
+
+void WorkFolderJanitor::remove(const std::wstring& dir)
+{
+    if (removeTree(dir)) return;
+    std::lock_guard<std::mutex> lock(m_);
+    pending_.push_back(dir);
+}
+
+HostWorkFolder* HostWorkFolder::create(std::shared_ptr<WorkFolderJanitor> janitor,
+                                       const std::wstring& rootIn, DWORD dwFlags)
+{
+    // 未定義のビットを指定すると失敗する(kpi_workfolder.h)
+    if (dwFlags & ~(DWORD)KPI_WORKFOLDER_FLAG_ANSI) return nullptr;
+
+    std::wstring root = rootIn;
+    if (root.empty()) {
+        wchar_t tmp[MAX_PATH + 1];
+        DWORD n = GetTempPathW(MAX_PATH + 1, tmp);
+        if (n == 0 || n > MAX_PATH) return nullptr;
+        root.assign(tmp, n);
+        if (!root.empty() && root.back() != L'\\' && root.back() != L'/') root += L'\\';
+        root += L"nokomo2";
+    }
+    wchar_t full[MAX_PATH * 4];
+    DWORD n = GetFullPathNameW(root.c_str(), (DWORD)(sizeof(full) / sizeof(full[0])), full, nullptr);
+    if (n == 0 || n >= sizeof(full) / sizeof(full[0])) return nullptr;
+    root.assign(full, n);
+    while (root.size() > 3 && (root.back() == L'\\' || root.back() == L'/')) root.pop_back();
+    std::error_code ec;
+    fs::create_directories(fs::path(root), ec);
+
+    if (dwFlags & KPI_WORKFOLDER_FLAG_ANSI) {
+        // GetPath の結果が CP_ACP で欠けずに変換出来ること。表せなければ失敗
+        // (本体と同じく ANSI で表せる別の場所は探さない)
+        std::string ansi;
+        if (!toAnsiStrict(root, &ansi)) return nullptr;
+    }
+
+    static std::atomic<uint32_t> counter{0};
+    for (int attempt = 0; attempt < 64; ++attempt) {
+        LARGE_INTEGER qpc;
+        QueryPerformanceCounter(&qpc);
+        uint32_t v = (uint32_t)qpc.QuadPart * 2654435761u ^ GetCurrentProcessId() * 40503u ^
+                     (counter.fetch_add(1) << 20);
+        wchar_t name[16];
+        swprintf(name, 16, L"%08X", v);
+        std::wstring dir = root;
+        if (dir.back() != L'\\') dir += L'\\';
+        dir += name;
+        // 中に作るファイルの余地も考え、フォルダ自体は MAX_PATH 未満にする
+        if (dir.size() + 1 >= MAX_PATH) return nullptr;
+        if (CreateDirectoryW(dir.c_str(), nullptr)) {
+            return new HostWorkFolder(std::move(janitor), dir + L"\\");
+        }
+        if (GetLastError() != ERROR_ALREADY_EXISTS) return nullptr;
+    }
+    return nullptr;
+}
+
+HostWorkFolder::~HostWorkFolder()
+{
+    std::wstring dir = path_;
+    if (!dir.empty() && dir.back() == L'\\') dir.pop_back();
+    janitor_->remove(dir);
+}
+
+///////////////////////////////////////////////////////////////////////////////
 // HostContext / HostRoot
 ///////////////////////////////////////////////////////////////////////////////
 
@@ -704,6 +851,26 @@ DWORD WINAPI HostRoot::CreateInstance(REFIID riid, void* pvParam1, void* pvParam
         DWORD* platform = (DWORD*)pvParam2;
         if (platform) *platform = 0; // 本体(=このホスト)が直接ロードしている
         *ppvObj = ctx_->getConfig((const GUID*)pvParam1);
+        return 1;
+    }
+    if (IsEqualGUID(riid, IID_IKpiMessenger)) {
+        // 受け取り先がなければ「この口に対応していない」(*ppvObj=NULL)
+        if (!ctx_->messageHandler) return 0;
+        // 通知元プラグインは kpi_CreateInstance 中の取得(仕様上の取得時期)でのみ特定出来る
+        std::wstring pluginPath;
+        if (ctx_->loadingThread.load() == GetCurrentThreadId()) {
+            pluginPath = ctx_->currentPluginPath;
+        }
+        *ppvObj = static_cast<IKpiMessenger*>(
+            new HostMessenger(ctx_->messageHandler, std::move(pluginPath)));
+        return 1;
+    }
+    if (IsEqualGUID(riid, IID_IKpiWorkFolder)) {
+        // pvParam1 = (DWORD_PTR)dwFlags(KPI_WORKFOLDER_FLAG_XXX)
+        HostWorkFolder* wf = HostWorkFolder::create(ctx_->workFolders, ctx_->options.workFolderRoot,
+                                                    (DWORD)(DWORD_PTR)pvParam1);
+        if (!wf) return 0;
+        *ppvObj = static_cast<IKpiWorkFolder*>(wf);
         return 1;
     }
     // 未知の IID: 仕様どおり何もしないで 0 を返す(*ppvObj は NULL のまま)

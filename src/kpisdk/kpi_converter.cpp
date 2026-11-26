@@ -12,6 +12,9 @@ HRESULT WINAPI kpi_CreateConverterModule(pfn_kpiCreateInstance fnCreateInstance,
                                      IKpiConverterModule **ppModule,
                                      IKpiUnknown *pUnknown)
 {
+    //先に NULL にしておく。プラグインが失敗時に *ppvObject を書き換えなくても、
+    // 呼び出し側の初期値が残らないようにする
+    *ppModule = NULL;
     return fnCreateInstance(IID_IKpiConverterModule, (void**)ppModule, pUnknown);
 }
 ///////////////////////////////////////////////////////////////////////////////

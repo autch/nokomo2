@@ -32,7 +32,7 @@
   *ppvObject にインスタンスを渡す場合は、適切な型にキャストすること。
   例えば、
 
-    if(IsEqualIID(riid, IID_IKpiUnArcModule){
+    if(IsEqualIID(riid, IID_IKpiUnArcModule)){
         CKpiXXXUnArcModule *pModule = new CKpiXXXUnArcModule;
         // *ppvObject = pModule; //NG
         *ppvObject = (IKpiUnArcModule*)pModule; //OK
@@ -42,10 +42,18 @@
   適切なポインタが渡されない可能性がある。
 */
 ///////////////////////////////////////////////////////////////////////////////
-#define KPI_UNARC_MODULE_VERSION 2 //仕様確定時に 100 とする予定
+#define KPI_UNARC_MODULE_VERSION 3 //仕様確定時に 100 とする予定
+//2026/11/25 KPI_UNARC_MODULE_VERSION を 2 から 3 に変更(v3.17beta7)
+//  ・IKpiUnArcModule::Open の作業用フォルダ(cszOutputPath)を廃止した。
+//    作業用フォルダが必要なプラグインは IKpiWorkFolder(kpi_workfolder.h)で本体から借りる。
+//  ・引数の数が変わるので(x86 では古い組み合わせで呼ぶとスタックが壊れる)、IID_IKpiUnArc と
+//    IID_IKpiUnArcModule を変更した。古い本体は新しいプラグインを、新しい本体は古いプラグインを
+//    読み込まない(kpi_CreateInstance が E_NOINTERFACE を返す)。
+//  修正前: class __declspec(uuid("{5496FFEA-0644-4B60-910F-6FFB1A25E298}")) IKpiUnArc;
+//  修正前: class __declspec(uuid("{E005FFCC-C053-4E12-8275-77920EFA14F7}")) IKpiUnArcModule;
 
-class __declspec(uuid("{5496FFEA-0644-4B60-910F-6FFB1A25E298}")) IKpiUnArc;
-class __declspec(uuid("{E005FFCC-C053-4E12-8275-77920EFA14F7}")) IKpiUnArcModule;
+class __declspec(uuid("{5AF41777-64AD-46C3-A132-31AC7B27D124}")) IKpiUnArc;
+class __declspec(uuid("{D8B07AD9-E3FB-4CDF-86E3-1D23C88974E1}")) IKpiUnArcModule;
 #define IID_IKpiUnArc       __uuidof(IKpiUnArc)
 #define IID_IKpiUnArcModule __uuidof(IKpiUnArcModule)
 
@@ -68,6 +76,9 @@ struct KPI_UNARC_MODULEINFO
     const wchar_t *cszCopyright;   //著作権(複数名いる場合は改行文字可)
     const wchar_t *cszSupportExts; //対応拡張子('/' で区切る)(例：".lzh/.zip", ".aaa/.bbb")(拡張子も含める)
     const wchar_t *cszSolidExts;   //対応拡張子のうち、ソリッド形式の可能性があるもの(開いてみないと分からないものを含む)
+                                   //(本体は Media エクスプローラで「圧縮ファイル：LZH/ZIP だけ検索」のとき、
+                                   // この拡張子の書庫は中を検索せずにフォルダとして表示する。正確でなくても
+                                   // 表示と検索の速さが変わるだけ)(2026/11/25 明記)
     DWORD dwSupportConfig;         //IKpiConfig による設定の読み書きに未対応なら 0
     DWORD dwReserved[4];           //must be 0
 };
@@ -79,6 +90,9 @@ struct KPI_ARCHIVEINFO
     DWORD       dwCount;       //格納ファイル数(列挙が終わるまで数がわからない場合は -1)
     DWORD       dwSolid;       //ソリッド書庫を含むなら 1、そうでないなら 0
                                //列挙が終わるまでわからないが含む可能性があるなら -1
+                               //(本体は、ソリッドでなく格納ファイルが少ない書庫を「1 つずつ速く開ける」と
+                               // みなし、Media エクスプローラでの曲名の読み取りを後回しにする。正確でなくても
+                               // 表示の速さが変わるだけ)(2026/11/25 明記)
     DWORD       dwReserved[12];//must be 0
 };
 ///////////////////////////////////////////////////////////////////////////////
@@ -124,6 +138,12 @@ public:
       dwIndex に対応する格納オブジェクトを解凍する。
       qwSize は解凍したいサイズ。(UINT64)-1 のときは全部解凍する。
       必要な部分だけ解凍したい場合に使われる。
+      ・qwSize に応じる義務はない。qwSize より大きく(全部)解凍して返しても良い。
+        本体は返されたものをそのまま使う。
+      ・今の本体が格納ファイルの大きさより小さい値を渡すのは、ドキュメント(テキストファイル)を
+        表示するときだけ(先頭の 128KB 程度まで)。
+        再生・タグ取得・一覧では (UINT64)-1 か格納ファイルの大きさを渡す。
+      (2026/11/25 明記)
     DWORD WINAPI UpdateConfig(void *pvReserved);
       IKpiUnArcModule::ApplyConfig の呼び出しで kPI_CFGRET_NOTIFY が返された
       場合のみ、本体によって IKpiUnArc のインスタンスごとに呼ばれる
@@ -138,7 +158,10 @@ public:
       ・展開後のデータが実ファイルの場合、
         ・ヘルパー関数 kpi_CreateLocalFile を呼び出すことでアーカイブプラグイン側での実装を省略可能
         ・実ファイルは IKpiUnArc が Release されるまでは存在していなければならない
-        ・実ファイルの削除は必要に応じてプラグインを使用する側が必要に応じて行う(cszOutputPath 以下に作成した場合)
+        ・実ファイルは IKpiWorkFolder(kpi_workfolder.h)で本体から借りた作業フォルダの中に作ること。
+          作業フォルダの削除は本体が行う(最後の Release で中身ごと消える)ので、プラグインが
+          消す必要はない。借りた作業フォルダは IKpiUnArc が Release されるまで持っておく。
+          (2026/11/25 修正。以前は IKpiUnArcModule::Open の cszOutputPath 以下に作成していた)
       ・展開後のデータがメモリバッファの場合、
         ・ヘルパー関数 kpi_CreateMemoryFile を呼び出すことでアーカイブプラグイン側での実装を省略可能
         ・kpi_CreateMemoryFile を使用する場合、メモリバッファは IKpiUnArc が Release されるまで有効でなければならない
@@ -174,8 +197,8 @@ public:
         例えば foo.lzh>xxx/aaa.txt に対する一時ファイル名が
             C:\TEMP\xxxx\yyy\aaa.txt となるよりは、
             C:\TEMP\xxxx\xxx\aaa.txt となることを推奨。
-      ・GetRealFileW が成功する場合、一時ファイル出力先は Open の第3引数
-        cszOutputPath 以下であることを強く推奨。
+      ・GetRealFileW が成功する場合、一時ファイル出力先は IKpiWorkFolder で借りた作業フォルダ
+        の中であることを強く推奨。(2026/11/25 修正。以前は Open の第3引数 cszOutputPath)
       ・GetRealFileW が成功する場合、同一アーカイブ内の他の格納ファイルの
         GetRealFileW も成功し、ディレクトリ階層構造も復元されていることを推奨。
       ・GetRealFileW/GetBuffer の呼び出しの前後でファイルポインタが変わってはいけない。
@@ -188,10 +211,12 @@ public:
         Extract で返した *ppFile を Release するまで IKpiUnArc を Release してはいけない。
       ・アーカイブプラグインの作成者は IKpiUnArc が Release されるとき、そのインスタンスが作成した
         IKpiFile は既に Release されていることを想定して良い。
-      ・GetRealFileW で作成した実ファイルの削除はプラグインを使用する側が行う。
-        (IKpiUnArcModule::Open の cszOutputPath 以下に作成した場合)
-        cszOutputPath 以下ではないフォルダに作成した場合(推奨されない)は IKpiFile か
-        IKpiUnArc の Release 時にプラグイン自身で削除しなければならない。
+      ・GetRealFileW で作成した実ファイルの削除は、IKpiWorkFolder で借りた作業フォルダの中に
+        作成した場合は本体が行う(作業フォルダの最後の Release で消える)。
+        それ以外のフォルダに作成した場合(推奨されない)は IKpiFile か IKpiUnArc の Release 時に
+        プラグイン自身で削除しなければならない。
+        (2026/11/25 修正。以前は IKpiUnArcModule::Open の cszOutputPath 以下に作成した場合に
+         プラグインを使用する側が削除していた)
 
     EnumFileInfo による列挙に関する注意点。
       ・空でないディレクトリは、列挙しなくても良い。
@@ -200,12 +225,16 @@ public:
       ・格納ファイル名の重複列挙(大文字と小文字を区別することによる重複など)は
         出来るだけ起こらないようにすること。
         ・本体が重複チェックをするので必須ではない。
-      ・Windows で使用出来ない文字(:*?"<>|)を使用した格納ファイル名は、出来るだけ
-        列挙しないようにすること。
-        ・本体がチェックするので必須ではない。
-      ・Directory Traversal 問題を起こすような格納ファイル名は、出来るだけ列挙
-        しないようにすること。
-        ・本体がチェックするので必須ではない。
+      ・Windows で使用出来ない文字(:*?"<>|)や制御文字(0x20 未満)を使用した格納ファイル名や、
+        Directory Traversal 問題を起こすような格納ファイル名(. と空白だけからなるパス要素を含む
+        名前。.. など)の扱いは、プラグインを使う側(本体など)が決める。
+        プラグインは、そのような格納ファイルを飛ばしても、そのまま列挙しても良い。
+        (2026/11/25 修正。以前は「出来るだけ列挙しないようにすること。本体がチェックするので
+         必須ではない」としていた。どう扱うか(その名前だけ除く・書庫ごと信用しない等)は使う側の
+         方針なので、プラグインに決まりを課さないことにした)
+      ・ただし、プラグイン自身が格納ファイルを実ファイルとして書き出す場合(外部のライブラリで
+        まとめて展開する場合を含む)は、使う側のチェックが効かないので、書き出す前にプラグイン側で
+        名前を確かめること(作業フォルダの外に書き込まないため)。
       ・EnumFileInfo で返した KPI_FILEINFO の寿命は IKpiUnArc が Release される
         までであることに十分に気を遣うこと。
         ・例えば内部で KPI_FILEINFO の配列を持っていて、EnumFileInfo の呼び出し
@@ -223,9 +252,9 @@ class IKpiUnArcModule : public IKpiUnknown
 {
 public:
     virtual void  WINAPI GetModuleInfo(const KPI_UNARC_MODULEINFO **ppInfo)=0;
+    //2026/11/25 修正(作業用フォルダ cszOutputPath を廃止。IKpiWorkFolder で借りる。KPI_UNARC_MODULE_VERSION の説明を参照)
     virtual BOOL  WINAPI Open(IKpiFile   *pFile,  //アーカイブファイル
                               IKpiFolder *pFolder,//アーカイブファイルがあるフォルダ
-                              const wchar_t *cszOutputPath,//作業用フォルダ
                               IKpiUnArc **ppUnArc)=0;
     virtual BOOL  WINAPI EnumConfig(IKpiConfigEnumerator *pEnumerator)=0;
     virtual DWORD WINAPI ApplyConfig(const wchar_t *cszSection,//セクション名
@@ -241,18 +270,24 @@ public:
 
     BOOL WINAPI Open(IKpiFile   *pFile,  //アーカイブファイル
                      IKpiFolder *pFolder,//アーカイブファイルがあるフォルダ
-                     const wchar_t *cszWorkPath,//作業用フォルダ
                      IKpiUnArc **ppUnArc)=0;
       pFile/pFolder からアーカイブを開く
       成功したら IKpiUnArc のインスタンスを *ppUnArc に設定して TRUE を返す
       (エラーの場合は *ppUnArc に NULL を設定して 0 を返す)
 
-      実ファイルとして展開する場合はなるべく cszOutputPath 以下に作成すること。
-      cszOutputPath 以下に作成したファイル(IKpiUnArc::Extract で返す IKpiFile が GetRealFileW
-      で返す実ファイル)及びフォルダ(cszOutputPath や、その下に作成したフォルダ)の削除をプラグ
-      イン側で行う必要はなく、プラグインを使用する側で行う
-      ただし、cszOutputPath 以外のフォルダに実ファイル/実フォルダを作成した場合は、Extract で
+      実ファイルとして展開する場合は、IKpiWorkFolder(kpi_workfolder.h)で本体から作業フォルダを
+      借りて、その中に作成すること。
+      ・作業フォルダは IKpiUnArc ごとに借りて、IKpiUnArc の Release まで持っておく
+        (Extract で返した実ファイルは IKpiUnArc が Release されるまで存在していなければならないため)。
+        Open の中で借りても、最初に実ファイルが必要になったときに借りても良い。
+      ・作業フォルダの中のファイルとフォルダは、最後の Release で本体が中身ごと消すので、
+        プラグイン側で削除する必要はない。
+      ・外部の DLL などが Unicode のパスに対応していない場合は KPI_WORKFOLDER_FLAG_ANSI を付けて借りる。
+      ・作業フォルダを借りられなかった場合(ANSI で表せない場所など)は、実ファイルが必要な展開だけを
+        失敗させる(一覧の取得やメモリ上への展開は続けて良い)。
+      作業フォルダ以外のフォルダに実ファイル/実フォルダを作成した場合(推奨されない)は、Extract で
       返す IKpiFile か IKpiUnArc の Release にプラグイン側で削除しなければならない。
+      (2026/11/25 修正。以前は第3引数の作業用フォルダ cszOutputPath 以下に作成していた)
 
       実ファイル名から開くメソッドは提供されない
       実ファイル名から開きたい場合は IKpiFile::GetRealFileW/A を呼び出す
@@ -317,10 +352,11 @@ extern DWORD WINAPI kpi_CreateLocalFile(IKpiUnknown *pUnknown, //kpi_CreateInsta
                                           IKpiFile **ppFile);
 //・kpi_CreateLocalFile は IKpiUnArc::Extract 内で呼び出し、取得した IKpiFile の インスタンスは
 //  Extract の第2引数(*ppFile) にそのまま渡さなければならない
-//・cszFileNameFullPath は IKpiUnArcModule::Open の cszOutputPath 以下に作成(階層構造も再現)されたものであることを強く推奨
+//・cszFileNameFullPath は IKpiWorkFolder で借りた作業フォルダの中に作成(階層構造も再現)されたものであることを強く推奨
 //・cszFileNameFullPath は IKpiUnArc が解放されるまで存在していなければならない
-//・cszFileNameFullPath が cszOutputPath 以下にある場合、IKpiUnArc の解放時にファイルを削除する必要はない
-//  (アーカイブプラグインを使用する側が必要に応じて削除する)
+//・cszFileNameFullPath が作業フォルダの中にある場合、IKpiUnArc の解放時にファイルを削除する必要はない
+//  (作業フォルダの最後の Release で本体が中身ごと消す)
+//  (2026/11/25 修正。以前は IKpiUnArcModule::Open の cszOutputPath 以下)
 //
 extern DWORD WINAPI kpi_CreateMemoryFile(IKpiUnkProvider *pProvider,
                                          const BYTE *pBuffer,  //メモリバッファへのポインタ

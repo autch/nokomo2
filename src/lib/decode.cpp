@@ -78,13 +78,16 @@ bool SessionImpl::selectTrack(uint32_t number)
 {
     selected = false;
     ended = true;
-    if (!decoder || number == 0) return false;
+    // 本体は Open が返した曲数より大きい曲番号を渡さないことを保証する(kpi_decoder.h
+    // 2026/11 明記。プラグインは範囲を確かめなくて良い)
+    if (!decoder || number == 0 || number > trackCount) return false;
 
     ComPtr<TagSink> sink;
     sink.attach(new TagSink);
     const KPI_MEDIAINFO* pmi = nullptr;
     DWORD got = decoder->Select(number, &pmi, sink.get(), KPI_TAGGET_FLAG_ALL);
-    if (got == 0 || !pmi) return false;
+    // 成否は「戻り値 == dwNumber」で判定する(kpi_decoder.h 2026/11 明記)
+    if (got != number || !pmi) return false;
 
     // *pmi の寿命は次のメソッド呼び出しまで。直ちにコピーする。
     mi = MediaInfo{};
@@ -93,6 +96,7 @@ bool SessionImpl::selectTrack(uint32_t number)
     mi.sampleRate = pmi->dwSampleRate;
     mi.bitsPerSample = pmi->nBitsPerSample;
     mi.channels = pmi->dwChannels;
+    mi.speakerConfig = pmi->dwSpeakerConfig;
     mi.formatType = pmi->dwFormatType;
     mi.length100ns = pmi->qwLength;
     mi.loop100ns = pmi->qwLoop;
@@ -104,6 +108,16 @@ bool SessionImpl::selectTrack(uint32_t number)
     sink->harvest(&tags);
 
     if (mi.sampleRate == 0 || mi.channels == 0 || mi.bytesPerSample() == 0) return false;
+    // チャンネル数は 1〜8(7.1ch まで。kpi_decoder.h 2026/11/18版)
+    if (mi.channels > 8) return false;
+    // スピーカー配置: 立っているビット数がチャンネル数と合わない値と、定義のないビット
+    // (SPEAKER_TOP_BACK_RIGHT(0x20000) より上)を含む値は 0(標準配置)として扱う
+    // (KbMedia Player 本体と同じ。kpisdk_for_ai_decoder.md 6-4)
+    {
+        uint32_t m = mi.speakerConfig, bits = 0;
+        for (uint32_t v = m; v; v &= v - 1) ++bits;
+        if ((m & ~0x3FFFFu) != 0 || bits != mi.channels) mi.speakerConfig = 0;
+    }
     // 新仕様の dwUnitSample は 16384 以下だが、旧仕様アダプタ経由では
     // dwUnitRender 由来でこれを超え得るため、明らかな異常値のみ弾く
     if (mi.unitSample > (1u << 22)) return false;

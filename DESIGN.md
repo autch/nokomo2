@@ -29,7 +29,15 @@ KbMedia Player 本体と同じ動作方針をとる。
 - タグ列挙(`PluginRegistry::scanTags`)は `Open(cpRequest=NULL)` +
   `Select(…, ppMediaInfo=NULL, 最小限のフラグ)` のタグ取得専用プロトコルを使う。
   `KPI_DECODER_MODULEINFO::TAG_TITLE` が立っていないプラグインにはタグ専用
-  オープンを行わない(仕様)。複数曲ファイルは `Select(0)` で全体情報も取る。
+  オープンを行わない(仕様)。ただし 1 ファイル複数曲の拡張子(cszMultiSongExts)
+  は、曲数を知る手段が Open の戻り値しかないため dwSupportTagInfo に関わらず
+  開く(SDK 2026/11/25版で明記。本体の動作も同じ)。複数曲ファイルは
+  `Select(0)` で全体情報も取る。
+- Select の成否は「戻り値 == 要求した曲番号」で判定する。`Select(0)` の失敗
+  (0xFFFFFFFF 等)は本体と同じくファイルを開けなかったものとみなし、次の候補
+  プラグインへフォールバックする(失敗にも 0 を返す古いプラグインは成功・
+  タグなしの扱いになる)。曲番号は Open が返した曲数を超えて渡さない(ホストの
+  保証事項)。
 - KbMedia Player 本体では、大量のファイルを列挙する際に「どのファイルのタグを
   どう取得するか」の判断(拡張子マッチ+同一拡張子の別フォーマットを見分ける
   ごく軽いフォーマットチェック)と一般的なタグ形式の解析を本体側に実装して
@@ -123,6 +131,12 @@ Add/RemoveDllDirectory は Win8 未満に存在しないため、ラッパ関数
 互換性を失わない(`JUNK` チャンクが 1 個入るだけで、標準的なリーダはこれを
 無視する)。ハイレゾ長時間録音などで RIFF の 32bit サイズ制限は問題にならない。
 int は WAVE_FORMAT_PCM、float(-32/-64)は WAVE_FORMAT_IEEE_FLOAT + fact。
+3ch 以上、またはスピーカー配置(`KPI_MEDIAINFO::dwSpeakerConfig`)が
+チャンネル数の標準配置と異なる場合は WAVE_FORMAT_EXTENSIBLE とし、
+dwChannelMask に配置を入れる(1/2ch の標準配置は従来どおりで出力は変わらない)。
+dwSpeakerConfig は本体と同じく、立っているビット数が dwChannels と合わない値や
+定義のないビット(0x20000 より上)を含む値を 0(標準配置)として扱う。
+dwChannels は 1〜8(SDK 2026/11/18版)で、9ch 以上の曲は Select 失敗とする。
 
 ## FLAC 出力対応の検討メモ(ライセンス確認済み)
 
@@ -160,9 +174,27 @@ SDK 2026/10/31版(KbMedia Player 3.17beta3)で、未定義動作や不測の事�
   とおり。プラグインが提供する IKpiFile(アーカイブ/変換プラグイン)を読む
   経路は nokomo2 には無い。
 
+SDK 2026/11/25版(KbMedia Player 3.17beta7)で追加・明記された事項への対応:
+
+- **IKpiConfig の保存上限**: SetStr は 16KB(終端を含む)、SetBin は 1MB。
+  超える場合は本体と同じく何もしない(保存しない)。
+- **IKpiMessenger**(利用者へのお知らせ): `HostOptions::onPluginMessage` が
+  設定されている場合だけ提供する(未設定なら「対応していない本体」と同じく
+  NULL を返す)。通知元プラグインは kpi_CreateInstance 中の取得(仕様上の取得
+  時期)でのみ特定出来、それ以外の時期・スレッドの取得では空になる。本文の
+  改行・タブ以外の制御文字は空白にし、長さは 4096 文字で切る。ハンドラは
+  プラグインのスレッドから同期的に呼ぶ(本体は写して即座に戻るが、nokomo2 は
+  キューを持たないのでハンドラ側がすぐ戻る前提)。
+- **IKpiWorkFolder**(プラグイン用の作業フォルダ): `HostOptions::workFolderRoot`
+  (既定 `%TEMP%\nokomo2`)の下に呼ぶたびに新しい空フォルダを作る。
+  KPI_WORKFOLDER_FLAG_ANSI は親パスが CP_ACP で無損失に表せなければ失敗、
+  未定義ビットも失敗。最後の Release で中身ごと削除する(リンクは辿らず
+  リンク自体だけ消す)。使用中で消せなかった分は PluginRegistry の破棄時
+  (全モジュール解放後)に再試行する。
+
 ## 仕様解釈の典拠
 
-仕様の解釈で迷った場合は、現行 SDK(src/kpisdk/ の kpi*.h 2026/10/31版と
+仕様の解釈で迷った場合は、現行 SDK(src/kpisdk/ の kpi*.h 2026/11/25版と
 kmp_pi.h 2016/10/03版)を正とする。旧仕様の再入要件などは時期により変遷しており、
 過去のホスト実装や個々のプラグインの挙動は実例・参考であって典拠ではない。
 
@@ -171,5 +203,7 @@ kmp_pi.h 2016/10/03版)を正とする。旧仕様の再入要件などは時期
 - ホスト側タグ解析(`GetTagInfo`)は対象外(前述)
 - アーカイブ/演奏/デバイスプラグインは対象外(仕様も未確定のため)
 - `kpi_CreateDecoder`(プラグインからプラグインを使う)は未提供
-  (本体も kbrunkpi 経由では未実装)
+  (本体は v3.17beta7 時点で kbrunkpi 経由以外は実装済み。入れ子の循環を
+  失敗させる規則あり)
+- IKpiVideoWindow(映像・ウィンドウ)は対象外(WAV 変換には不要)
 - シーク API(`DecodeSession::seek`)は未実装

@@ -11,6 +11,8 @@ DWORD WINAPI kpi_CreateDecoder(IKpiUnkProvider *pProvider,
                                IKpiFolder   *pFolder, //音楽データがあるフォルダ
                                IKpiDecoder **ppDecoder)
 {
+    //先に NULL にしておく(ほかのヘルパー(kpi_CreateConfig/kpi_CreateLocalFile 等)と同じ)
+    *ppDecoder = NULL;
     return pProvider->CreateInstance(IID_IKpiDecoder,
                                      (void*)cpRequest, pFile, pFolder,
                                      NULL,
@@ -25,7 +27,8 @@ DWORD WINAPI kpi_CreateDecoder(IKpiUnknown *pUnknown,  //kpi_CreateInstance の�
 {//IKpiUnknown(kpi_CreateInstance の第3引数)から直接取得
  //呼び出し時は pUnknown に kpi_CreateInstance の第3引数をそのまま渡すこと
     IKpiUnkProvider *pProvider = NULL;
-    if(pUnknown->QueryInterface(IID_IKpiUnkProvider, (void**)&pProvider) == S_OK){
+    //pUnknown が NULL でも落ちないようにする(IKpiUnkProvider を得られない場合と同じ扱い)
+    if(pUnknown && pUnknown->QueryInterface(IID_IKpiUnkProvider, (void**)&pProvider) == S_OK){
         DWORD dwRet = kpi_CreateDecoder(pProvider,
                                         cpRequest, pFile, pFolder, ppDecoder);
         pProvider->Release();//pProvider が不要なら ppDecoder を解放後でなくても解放可能
@@ -42,6 +45,9 @@ HRESULT WINAPI kpi_CreateDecoderModule(pfn_kpiCreateInstance fnCreateInstance,
                                        IKpiDecoderModule **ppModule,
                                        IKpiUnknown *pUnknown)
 {
+    //先に NULL にしておく。プラグインが失敗時に *ppvObject を書き換えなくても、
+    // 呼び出し側の初期値が残らないようにする
+    *ppModule = NULL;
     return fnCreateInstance(IID_IKpiDecoderModule, (void**)ppModule, pUnknown);
 }
 ///////////////////////////////////////////////////////////////////////////////

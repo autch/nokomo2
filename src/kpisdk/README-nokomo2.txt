@@ -1,5 +1,5 @@
 このディレクトリは Kobarin 氏の KbMedia Player プラグイン SDK
-(2026/10/31 版、KbMedia Player 3.17beta3 付属)のコピーです。原本は
+(2026/11/25 版、KbMedia Player 3.17beta7 付属)のコピーです。原本は
 KbMedia Player 公式サイトから入手出来ます。
 
 ファイルは原本のまま無変更です(この README-nokomo2.txt のみ追加)。
@@ -14,5 +14,10 @@ SDK を更新する場合は新しい SDK のファイルをこのディレク�
 
 として UTF-8 に変換する必要があります。
 
-kpi_converter.h/.cpp(変換プラグイン)は nokomo2 では使用していません
-(SDK 一式として同梱しているのみ)。
+なお 2026/11/25 版の kpi.h 冒頭の版表記は「2026/11/18版(本体Ver 3.17beta6 用)」
+のままですが、更新履歴の最新は 2026/11/25(v3.17beta7)です。
+
+kpi_converter.h/.cpp(変換プラグイン)・kpi_unarc.h/.cpp・kpi_player.h/.cpp・
+kpi_device.h/.cpp・kpi_video_window.h は nokomo2 では使用していません
+(SDK 一式として同梱しているのみ)。kpisdk_for_ai*.md は SDK 付属の AI 向け補足
+(ヘッダに書かれていない前提・本体の動きの細部)で、これも原本のままです。

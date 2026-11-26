@@ -7,6 +7,8 @@
 #include "kpi.h"
 #include "kpi_decoder.h"
 #include "kpi_impl.h"
+#include "kpi_message.h"
+#include "kpi_workfolder.h"
 
 #include "kpi_mingw_uuid.h" // MinGW/clang クロスビルド検証用(MSVC では無効)
 
@@ -183,6 +185,60 @@ private:
 };
 
 ///////////////////////////////////////////////////////////////////////////////
+// IKpiMessenger 実装: プラグインからのお知らせを HostOptions::onPluginMessage へ渡す
+class HostMessenger final : public KbKpiUnknownImpl<IKpiMessenger> {
+public:
+    HostMessenger(std::shared_ptr<const PluginMessageHandler> handler, std::wstring pluginPath)
+        : handler_(std::move(handler)), pluginPath_(std::move(pluginPath)) {}
+
+    void WINAPI Notify(DWORD dwFlags, const wchar_t* cszFileName, const wchar_t* cszText) override;
+
+private:
+    ~HostMessenger() override = default;
+    // プラグインがモジュール解放まで保持するので、ハンドラは共有所有で持つ
+    std::shared_ptr<const PluginMessageHandler> handler_;
+    std::wstring pluginPath_;
+};
+
+///////////////////////////////////////////////////////////////////////////////
+// IKpiWorkFolder 実装
+//
+// 最後の Release でフォルダを中身ごと削除する。使用中で消せなかった分は
+// WorkFolderJanitor に預け、その破棄時(HostContext の破棄 = 全モジュール解放後)に
+// もう一度削除を試みる。
+class WorkFolderJanitor {
+public:
+    WorkFolderJanitor() = default;
+    ~WorkFolderJanitor();
+    WorkFolderJanitor(const WorkFolderJanitor&) = delete;
+    WorkFolderJanitor& operator=(const WorkFolderJanitor&) = delete;
+
+    // dir(末尾 \ なし)を中身ごと削除する。失敗したら後で再試行するため保持する
+    void remove(const std::wstring& dir);
+
+private:
+    std::mutex m_;
+    std::vector<std::wstring> pending_;
+};
+
+class HostWorkFolder final : public KbKpiUnknownImpl<IKpiWorkFolder> {
+public:
+    // root 直下に新しい空のフォルダを作る。失敗時 nullptr。参照カウント 1 で返す
+    static HostWorkFolder* create(std::shared_ptr<WorkFolderJanitor> janitor,
+                                  const std::wstring& root, DWORD dwFlags);
+
+    const wchar_t* WINAPI GetPath(void) override { return path_.c_str(); }
+
+private:
+    HostWorkFolder(std::shared_ptr<WorkFolderJanitor> janitor, std::wstring path)
+        : janitor_(std::move(janitor)), path_(std::move(path)) {}
+    ~HostWorkFolder() override;
+
+    std::shared_ptr<WorkFolderJanitor> janitor_;
+    std::wstring path_; // 末尾 \ 付き
+};
+
+///////////////////////////////////////////////////////////////////////////////
 // ホスト全体の状態。PluginRegistry が所有し、全プラグインで共有される。
 class HostRoot;
 
@@ -193,6 +249,14 @@ struct HostContext {
     // kpi_CreateInstance 呼び出しの直列化と、GUID_NULL 設定のキー解決に使う
     std::mutex loadMutex;
     std::wstring currentPluginKey;  // ロード中プラグインのファイル名 stem
+    std::wstring currentPluginPath; // ロード中プラグインのフルパス
+    // kpi_CreateInstance を呼んでいるスレッド(0=ロード中でない)。
+    // ロード中以外のスレッドが currentPlugin* を読まないようにするため
+    std::atomic<DWORD> loadingThread{0};
+
+    // onPluginMessage の共有コピー(空なら IKpiMessenger を提供しない)
+    std::shared_ptr<const PluginMessageHandler> messageHandler;
+    std::shared_ptr<WorkFolderJanitor> workFolders = std::make_shared<WorkFolderJanitor>();
 
     std::mutex configMutex;
     std::map<std::wstring, ComPtr<MemoryConfig>> configs; // キー → 設定
@@ -204,7 +268,8 @@ struct HostContext {
 
 ///////////////////////////////////////////////////////////////////////////////
 // kpi_CreateInstance の第3引数として渡す IKpiUnknown 兼 IKpiUnkProvider。
-// 現状 IID_IKpiConfig のみ処理する(未知の IID は *ppvObj=NULL, 戻り値 0)。
+// IID_IKpiConfig / IID_IKpiMessenger / IID_IKpiWorkFolder を処理する
+// (未知の IID は *ppvObj=NULL, 戻り値 0)。
 class HostRoot final : public KbKpiUnknownImpl<IKpiUnkProvider> {
 public:
     explicit HostRoot(HostContext* ctx) : ctx_(ctx) {}

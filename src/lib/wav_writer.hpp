@@ -1,6 +1,8 @@
 #pragma once
 // RIFF WAVE / RF64 ファイル出力。
 // int(8/16/24/32bit) は WAVE_FORMAT_PCM、float(-32/-64) は WAVE_FORMAT_IEEE_FLOAT。
+// 3ch 以上、またはスピーカー配置が標準(nokomo::defaultChannelMask)と異なる場合は
+// WAVE_FORMAT_EXTENSIBLE(dwChannelMask 付き)で書く。1/2ch の標準配置は従来どおり。
 //
 // 2GB/4GB 問題への対応(EBU Tech 3306 の定石):
 //   書き始めは "RIFF" + ダミーの "JUNK" チャンク(ds64 と同サイズ)で純 WAV として
@@ -21,9 +23,10 @@ public:
     WavWriter(const WavWriter&) = delete;
     WavWriter& operator=(const WavWriter&) = delete;
 
+    // channelMask: スピーカー配置(WAVEFORMATEXTENSIBLE::dwChannelMask。0=標準配置)
     // forceRf64: サイズによらず常に RF64 で確定する(既定は自動判定)
     bool open(const std::wstring& path, uint32_t sampleRate, uint32_t channels,
-              int32_t bitsPerSample, bool forceRf64 = false);
+              int32_t bitsPerSample, uint32_t channelMask, bool forceRf64 = false);
     // 戻り値は書き込めたフレーム数(ディスクフル等で frames より小さくなり得る)
     size_t write(const void* data, size_t frames);
     bool close(); // ヘッダのサイズを確定する(必要なら RF64 へ昇格)

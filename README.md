@@ -42,6 +42,7 @@ nkmconv -P <Pluginsフォルダ> [オプション] <入力ファイル...>
                   (通常は KbMedia Player 本体の x64/x86 フォルダを指定)
   --no-cache      プラグイン情報キャッシュを使わない
   --rf64          常に RF64 で出力(既定は 4GiB 超過時に自動昇格)
+  --work-dir <dir> プラグイン用作業フォルダの親(既定: %TEMP%\nokomo2)
 ```
 
 - `-P` には KbMedia Player の Plugins フォルダをそのまま指定出来る
@@ -53,6 +54,11 @@ nkmconv -P <Pluginsフォルダ> [オプション] <入力ファイル...>
   次の候補にフォールバックする。不採用となった候補は
   「候補 xxx.kpi vNN → 理由」の形式で表示される
 - 出力 WAV が 4GiB を超える場合は自動的に RF64 になる(それ未満は純粋な WAV)
+- 3ch 以上(7.1ch まで)の曲は WAVE_FORMAT_EXTENSIBLE(スピーカー配置付き)で出力する
+- プラグインからのお知らせ(KbMedia Player のメッセージログに出るもの)は
+  「[お知らせ: xxx.kpi]」として標準エラー出力に表示する
+- プラグインが作業フォルダを要求した場合は `--work-dir`(既定 `%TEMP%\nokomo2`)
+  の下に作り、使い終わったら中身ごと削除する
 
 ## ライブラリ API の例
 
@@ -82,8 +88,8 @@ for (uint32_t n = 1; n <= s->trackCount(); ++n) {
 
 ## SDK・ライセンスについて
 
-`src/kpisdk/` は Kobarin 氏の KbMedia Player プラグイン SDK(2026/10/31版、
-KbMedia Player 3.17beta3 付属)の無変更のコピー(詳細は
+`src/kpisdk/` は Kobarin 氏の KbMedia Player プラグイン SDK(2026/11/25版、
+KbMedia Player 3.17beta7 付属)の無変更のコピー(詳細は
 src/kpisdk/README-nokomo2.txt)。原本は KbMedia Player 公式サイト
 から入手出来る。SDK ドキュメントによりプラグインを使用するアプリケーションの
 作成・配布は許可されている(詳細はプラグインソースコード一式の readme.txt)。
